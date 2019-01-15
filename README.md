@@ -29,7 +29,7 @@ about the results we're trying to predict.
 
 So we want minimal cross entropy between outputs y and our logistic model p(y|X,P). Through minimizing the cross entropy, we can determine 
 optimal parameters for our logistic regression, thereby giving our optimal predictive model that can be used in the chess engine for playing games. 
-Two separate optimization algorithms can be used for cross entropy optimization, as outlined below with the other parts of the project. 
+Two separate optimization algorithms can be used for cross entropy optimization, as outlined below with the other parts of the project.
 
 Here's what's included as of 1/15/19: 
 
@@ -45,5 +45,8 @@ Here's what's included as of 1/15/19:
 
 3. Game.py:       Script which executes the game in terminal. The game is currently NOT READY for solid play, as my old computer is unable to execute the learning algorithms 
                   properly on the training data. Moreover, transitions from alpha beta pruning are still being made. Game with animations should be up soon. 
+
+4. Parameters.txt: Text file containing the optimized parameters. Note that if you use Learn_Grad or Learn_Newton with new training data 
+                  to learn improved parameters, ensure that they are saved to this parameters.txt file. **NOTE: I cannot currently run either learning algorithm on my comuter with very much training data, so I have set the initial parameters to a naive configuration. 
        
 If you have questions, please email me at camjohn@g.ucla.edu. Enjoy! 
