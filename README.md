@@ -1,10 +1,10 @@
 # Chess-Project
-Personal interest and curiosity in AI and chess inspired me to start my own chess project a few years ago. Originally, the project was in
-java, after which a swift version was created. Due to Python's chess library, I began to switch over to Python simply because it saved time
-and was a lot cleaner. Also, Python's numpy library offers more ML tools than found in Java, making the math used in the learning/optimization
+Personal interest and curiosity in AI and chess inspired me to start my own chess project a few years ago. Originally, I coded the project in
+java, after which I authored another rough draft in swift. Due to Python's tremendously convenient and elegant chess library, I've now mostly switched over to Python. Using Python's chess engine has dramatically saved time
+and reduced code length and complexity. Also, Python's numpy library offers far more ML tools than found in Java, making the math used in the learning/optimization
 algorithms much faster and easier/cleaner to code. Newest and best components of the project are mostly in Python, with select pieces, such 
-as the game animation, feature extraction, and the alpha-beta pruning used for move optimization still work better in Java. The latter two 
-appear to stem from the fact that Java is a faster programming language than Python. For the time being, strictly the Python code is uploaded. 
+as the game animation, feature extraction, and the alpha-beta pruning used for move optimization still working better in Java. The latter two 
+appear to stem from the fact that Java is a faster programming language than Python. For the time being, only the Python code has been uploaded. 
 
 At the core of the project is cost function selection, learning algorithms, and the AI's rapid calculation of optimal moves. Cost function selection 
 refers to the following question: What form should a function take if it takes data from a chess board as input, and outputs a probability
