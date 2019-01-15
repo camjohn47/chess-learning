@@ -1,5 +1,5 @@
 # Chess-Project
-Personal interest and curiosity in AI and chess inspired me to start my own chess project a few years ago. Originally, I coded the project in
+Immense curiosity in AI and chess inspired me to start a chess project three years ago. Originally, I coded the project in
 java, after which I authored another rough draft in swift. Due to Python's tremendously convenient and elegant chess library, I've now mostly switched over to Python. Using Python's chess engine has dramatically saved time
 and reduced code length and complexity. Also, Python's numpy library offers far more ML tools than found in Java, making the math used in the learning/optimization
 algorithms much faster and easier/cleaner to code. Newest and best components of the project are mostly in Python, with select pieces, such 
