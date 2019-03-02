@@ -10,7 +10,7 @@ At the core of the project is cost function selection, learning algorithms, and 
 refers to the following question: What form should a function take if it takes data from a chess board as input, and outputs a probability
 of white winning the game? I suspect that a neural network could be a very powerful answer to this question, but for now, a logistic regression 
 model is chosen. More specifically, let the result of the game be our output y, where y=0 is a defeat for white, y=0.5 is a draw, and y=1 is a victory
-for white. Logistic regression, in the context of chess, predicts game outcome y using N inputs [x_1,...,x_N] = X extracted from the board, and $N$ parameters 
+for white. Logistic regression, in the context of chess, predicts game outcome y using N inputs [x_1,...,x_N] = X extracted from the board, and N parameters 
 [p_1,...,p_N] = P as follows: 
 
 p(y|X,P) = 1 / (1 + exp(- sum_{i=1}^{N} ( x_i*p_i) ) ).
