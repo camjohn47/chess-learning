@@ -1,15 +1,13 @@
 # Chess-Project
-Immense curiosity in AI and chess inspired me to start a chess project three years ago. Originally, I coded the project in
-Java, after which I authored another rough draft in Swift. Due to Python's tremendously convenient and elegant chess library, I've now mostly switched over to Python. Using Python's chess engine has dramatically saved time
-and reduced code length and complexity. Also, Python's numpy library offers far more ML tools than found in Java, making the math used in the learning/optimization
-algorithms much faster and easier/cleaner to code. Newest and best components of the project are mostly in Python, with select pieces, such 
-as the game animation, feature extraction, and the alpha-beta pruning used for move optimization still working better in Java. The latter two 
-appear to stem from the fact that Java is a faster programming language than Python. For the time being, only the Python code has been uploaded. 
+If you're interested in chess, AI, and/or Python, this project might be worth checking out. The core features you'll find in this repo are the following: i) A Python chess board module 'ChessBoard.py'. ii) A pipeline 'learn_chess.py' which trains a supervised ML model to predict the winning player of a chess game from thousands of expert games. iii) Chess game engine 'ChessGame.py' with AI that you can play against in terminal. The gameplay itself is definitely still a work in progress, so if that's your main interest, you've been warned. If you'd like to learn more about the underlying ideas behind the project, please read below.
+
+
+
 
 At the core of the project is cost function selection, learning algorithms, and the AI's rapid calculation of optimal moves. Cost function selection 
 refers to the following question: What form should a function take if it takes data from a chess board as input, and outputs a probability
 of white winning the game? I suspect that a neural network could be a very powerful answer to this question, but for now, a logistic regression 
-model is chosen. More specifically, let the result of the game be our output y, where y=0 is a defeat for white, y=0.5 is a draw, and y=1 is a victory
+model is chosen. More specifically, suppose the result of the game is an output y, where y=0 is a defeat for white, y=0.5 is a draw, and y=1 is a victory
 for white. Logistic regression, in the context of chess, predicts game outcome y using N inputs [x_1,...,x_N] = X extracted from the board, and N parameters 
 [p_1,...,p_N] = P as follows: 
 
@@ -49,4 +47,4 @@ Here's what's included as of 1/15/19:
 4. Parameters.txt: Text file containing the optimized parameters. Note that if you use Learn_Grad or Learn_Newton with new training data 
                   to learn improved parameters, ensure that they are saved to this parameters.txt file. **NOTE: I cannot currently run either learning algorithm on my comuter with very much training data, so I have set the initial parameters to a naive configuration. 
        
-If you have questions, please email me at camjohn@g.ucla.edu. Enjoy! 
+If you have any questions or feedback, please email me at curiouscalvinj@gmail.com. 
