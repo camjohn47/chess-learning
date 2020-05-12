@@ -54,8 +54,20 @@ pipeline.batch_learning(num_partitions,model_path,downsample)
 ```
 Since holding the features for hundreds of thousands of games all at once will likely cause memory overflow, batch learning randomly partitions the chess positions found in the different games amongst the pgn files. Then, a batch of input features is made for each partition individually, which is then used for batch training. This way, memory is only needed for one batch at a time. 
 
-ii) ChessAI.py: AI engine used by the *ChessGame* module. It uses an alpha-beta pruning search to determine optimal moves given a valuation function. The valuation function assesses how good a chess position is for either player. You can choose to use either an ML valuation function or a heuristic based valuation function. Heuristic valuation can be customized by changing the *get_features* method. Input features used for heuristic/model-driven valuation can be customized through modifying *get_heuristic_features/get_model_features*. 
+### Chess AI
+AI engine used for calculating opponent moves in the *ChessGame* module. It uses an alpha-beta pruning search to determine optimal moves given a valuation function. The valuation function assesses how good a chess position is for either player. You can choose to use either an ML valuation function or a heuristic based valuation function. Heuristic valuation can be customized by changing the *get_features* method. Input features used for heuristic/model-driven valuation can be customized through modifying *get_heuristic_features/get_model_features*. 
 
-iii) ChessGame.py: A Python interface for playing chess that runs in terminal. You can use this to test ML models built from the chess pipeline; test any arbitrary chess evaluation function (for example, using heuristics or a ML model trained with *ChessPipeline*); or simply play for fun. You can find an example of how to start a game with *ChessGame* below. 
+### Chess Game 
+A Python interface for directly playing chess in Terminal. When playing chess games with *ChessGame.py*, opponent game play stems from an instance of *ChessAI*. You can use this to test ML models built from a chess pipeline; test any arbitrary chess evaluation function (for example, using heuristics or a ML model trained with *ChessPipeline*); or just play for fun.
+
+Note that this script uses a position cache to store chess positions and their valuations as they're calculated. This means that when changing models, the path should be changed as well. Without doing so, different chess positions can be calculated with different valuation functions in the same game. The following excerpt is taken from the end of the *ChessGame* script. This is the code in which changes should be made to reflect new models.
+
+``` shell
+$ from ChessAI import ChessAI
+
+$ cache_path = 'example_cache.data'
+$ model_path = 'example_model.data'
+$ ai = ChessAI(cache_path=cache_path,model_path=model_path)
+```
 
 If you have any questions or feedback, please email curiouscalvinj@gmail.com. Thanks for checking the project out.
