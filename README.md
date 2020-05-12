@@ -1,50 +1,60 @@
-# Chess-Project
-If you're interested in chess, AI, and/or Python, this project might be worth checking out. The core features you'll find in this repo are the following: i) A Python chess board module 'ChessBoard.py'. ii) A pipeline 'learn_chess.py' which trains a supervised ML model to predict the winning player of a chess game from thousands of expert games. iii) Chess game engine 'ChessGame.py' with AI that you can play against in terminal. The gameplay itself is definitely still a work in progress, so if that's your main interest, you've been warned. If you'd like to learn more about the underlying ideas behind the project, please read below.
+# Chess-System
+This project is about analyzing patterns from large amounts of chess game data. Specifically, this code can train supervised ML models from hundreds of thousands of chess games. These models can then be tested and experimented with by playing chess against an AI that uses these models for optimal play. More detailed instructions about installation and different features of the project are shown below.
 
+## Table of Contents (Optional)
 
+> If your `README` has a lot of info, section headers might be nice.
 
+- [Installation](#installation)
+- [Features](#features)
+- [Contributing](#contributing)
+- [Team](#team)
+- [FAQ](#faq)
+- [Support](#support)
+- [License](#license)
 
-At the core of the project is cost function selection, learning algorithms, and the AI's rapid calculation of optimal moves. Cost function selection 
-refers to the following question: What form should a function take if it takes data from a chess board as input, and outputs a probability
-of white winning the game? I suspect that a neural network could be a very powerful answer to this question, but for now, a logistic regression 
-model is chosen. More specifically, suppose the result of the game is an output y, where y=0 is a defeat for white, y=0.5 is a draw, and y=1 is a victory
-for white. Logistic regression, in the context of chess, predicts game outcome y using N inputs [x_1,...,x_N] = X extracted from the board, and N parameters 
-[p_1,...,p_N] = P as follows: 
+## Installation 
 
-p(y|X,P) = 1 / (1 + exp(- sum_{i=1}^{N} ( x_i*p_i) ) ).
+### Clone
+You can clone this repository by using the following link: BLANK. 
 
-Note that a perfect logistic regression model almost surely doesn't exist for chess, because it's far too complicated. Hence why neural networks are likely needed to 
-exceed performance past a certain threshold. Choosing which features to include, as well as how many (how big should N be), not only effects how well 
-the above probability can be approximated, but run time as well. As the size and complexity of features increase, the maximum depth of the game tree search decreases.
+### Prerequisites and Setup
+You'll need the following Python modules in order to run all three modules: 
+* numpy
+* sklearn
+* random
+* glob
+* chess
+* math
+* pickle
 
-In the above model, another question is how to choose the parameter P. Entropy is a deep mathematical concept, but in short, it encapsulates 
-the uncertainty of a probability distribution. For example, if you have two coins such that one is fair and the other is very heavily weighted on one side, 
-the former coin has relatively higher entropy. This is because it's more difficult to predict the outcome of the fair coin than the outcome of the weighted coin. 
-Cross entropy is similar, except that it measures the uncertainty between two distributions (kind of). Specifically, cross entropy measures 
-the number of bits needed (on average) to describe an event from one distribution using optimal code for another. It follows that cross entropy of 
-the chess game results and our logistic model gives a notion of how similar they are, and thus how well our logistic model captures information 
-about the results we're trying to predict. 
+Once all of these modules are properly installed, you can run any of the modules from within their directory. 
 
-So we want minimal cross entropy between outputs y and our logistic model p(y|X,P). Through minimizing the cross entropy, we can determine 
-optimal parameters for our logistic regression, thereby giving our optimal predictive model that can be used in the chess engine for playing games. 
-Two separate optimization algorithms can be used for cross entropy optimization, as outlined below with the other parts of the project.
+## Features
+### Chess Pipeline
+A pipeline for parsing and analyzing large amounts of pgn chess files. Pgn is a format in which chess games can be represented, and a pgn file is a file containing multiple pgn chess games. The pipeline is designed with certain ways in which it can analyze pgn chess positions. These include the amount of each player's piece types on the board, where each piece is located, bishop pairs, pawn development, etc.. However, you can include whatever methods you want to use for analysis easily as long as they are done so with python-chess: https://python-chess.readthedocs.io/en/latest/. 
 
-Here's what's included as of 1/15/19: 
+Note that in order to find any meaningful insights about chess from game play, tens of thousands of expert games are very likely a bare minimum. The example training data provided in the directory *training_data* contains hundreds of thousands of expert games thanks to pgnmentor.com.
 
-1. Learn_Grad.py: A program which analyzes thousands of chess games and extracts certain key features from each one. Using this data, 
-                  a stochastic gradient descent algorithm is executed on this data for optimizing the logistic regression. Stochastic gradient
-                  descent works by randomly permuting the training data at each iteration, and applying gradient increments in the parameters
-                  associated with each random training sample. Step size dictates how far each step is scaled. When convergence has been reached or the maximum iteration is reached, the optimal 
-                  parameter is written to a chosen file that is used in the game program Game.py. 
+To get started with a ChessPipeline, you need to initialize it with two parameters: *pgn_directory* and *model_args*. The former is a directory in which pgn files are located; the latter consists of the desired ML model configurations. Note that the ML model is a *SGDClassifier*. Different models can be implemented without much modification to the code. Here is an example of how to start a ChessPipeline from pgn data in *training_data*, run batch learning on 200,000 of its games, and save the resulting model to *final_test.data*. 
 
-2. Learn_Newton.py: Identical to Learn_Grad.py, except that newton's method is used instead. Newton's method typically requires far fewer iterations than
-                  any gradient descent; optimal step size is known in closed form; and its use of higher derivatives often results in smoother convergence.
-                  However, the inverse of the hessian matrix needs to be calculated at each step, which is an enormous matrix in our context. 
+```shell
+$ pgn_directory = 'training_data'
+$ num_partitions = int(1.0e2)
+$ model_path = 'final_test.data'
+$ regularization = 5.0e-4
+$ downsample = 2.0e5
+$ loss_function = 'log'
+$ model_args = {'loss':loss_function,'alpha':regularization}
 
-3. Game.py:       Script which executes the game in terminal. The game is currently NOT READY for solid play, as my old computer is unable to execute the learning algorithms 
-                  properly on the training data. Moreover, transitions from alpha beta pruning are still being made. Game with animations should be up soon. 
+pipeline = ChessPipeline(pgn_directory=pgn_directory,model_args=model_args)
+pipeline.batch_learning(num_partitions,model_path,downsample)
+```
 
-4. Parameters.txt: Text file containing the optimized parameters. Note that if you use Learn_Grad or Learn_Newton with new training data 
-                  to learn improved parameters, ensure that they are saved to this parameters.txt file. **NOTE: I cannot currently run either learning algorithm on my comuter with very much training data, so I have set the initial parameters to a naive configuration. 
-       
+ii) ChessAI.py: AI engine used by the ChessGame module. 
+
+iii) ChessGame.py: A Python interface for playing chess that runs in terminal. You can use this to test ML models built from the chess pipeline, test any arbitrary chess evaluation function (for example, using heuristics), or simply play for fun. 
+
+More detailed instructions are below. 
+
 If you have any questions or feedback, please email me at curiouscalvinj@gmail.com. 
