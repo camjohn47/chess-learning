@@ -27,7 +27,7 @@ Once all of these modules are properly installed, you can run any of the modules
 
 ## Features
 ### Chess Pipeline
-A pipeline for parsing and analyzing large amounts of pgn chess files. Pgn is a format in which chess games can be represented, and a pgn file is a file containing multiple pgn chess games. The pipeline is designed with certain ways in which it can analyze pgn chess positions. These include the amount of each player's piece types on the board, where each piece is located, bishop pairs, pawn development, etc.. However, you can include whatever methods you want to use for analysis easily as long as they are done so with python-chess: https://python-chess.readthedocs.io/en/latest/. 
+A pipeline for parsing and analyzing large amounts of pgn chess files. Pgn is a format in which chess games can be represented, and a pgn file is a file containing multiple pgn chess games. The pipeline is designed with the capability to build certain features from a chess position. These include the amount of each player's piece types on the board, where each piece is located, bishop pairs, pawn development, etc.. However, you can easily write methods to build additional features, insofar as these features can be built with *python-chess*: https://python-chess.readthedocs.io/en/latest/. The module is extensive, so most features should be within *python-chess*'s capabilities. 
 
 Note that in order to find any meaningful insights about chess from game play, tens of thousands of expert games are very likely a bare minimum. The example training data provided in the directory *training_data* contains hundreds of thousands of expert games thanks to pgnmentor.com.
 
