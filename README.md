@@ -53,9 +53,9 @@ Since holding the features for hundreds of thousands of games all at once will l
 AI engine used for calculating opponent moves in the *ChessGame* module. It uses an alpha-beta pruning search to determine optimal moves given a valuation function. The valuation function assesses how good a chess position is for either player. You can choose to use either an ML valuation function or a heuristic based valuation function. Heuristic valuation can be customized by changing the *get_features* method. Input features used for heuristic/model-driven valuation can be customized through modifying *get_heuristic_features/get_model_features*. 
 
 ### Chess Game 
-A Python interface for directly playing chess in Terminal. When playing chess games with *ChessGame.py*, opponent game play stems from an instance of *ChessAI*. You can use this to test ML models built from a chess pipeline; test any arbitrary chess evaluation function (for example, using heuristics or a ML model trained with *ChessPipeline*); or just play for fun.
+A Python interface for directly playing chess in Terminal. When playing chess games with the *chess_game* script, opponent game play comes from an instance of *ChessAI*. You can use this to test ML models built from a chess pipeline; test any arbitrary chess evaluation function (for example, using heuristics or a ML model trained with *ChessPipeline*); or just play for fun.
 
-Note that this script uses a position cache to store chess positions and their valuations as they're calculated. This means that when changing models, the path should be changed as well. Without doing so, different chess positions can be calculated with different valuation functions in the same game. The following excerpt is taken from the end of the *ChessGame* script. This is the code in which changes should be made to reflect new models.
+Note that this script uses a position cache to store chess positions and their valuations as they're calculated. This means that when changing models, the path should be changed as well. Without doing so, different chess positions can be calculated with different valuation functions in the same game. The following excerpt is taken from the end of the *chess_game* script. This is the code in which changes should be made to reflect new models.
 
 ``` python
 from ChessAI import ChessAI
