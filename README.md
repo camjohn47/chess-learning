@@ -7,11 +7,6 @@ This project is about analyzing patterns from large amounts of chess game data. 
 
 - [Installation](#installation)
 - [Features](#features)
-- [Contributing](#contributing)
-- [Team](#team)
-- [FAQ](#faq)
-- [Support](#support)
-- [License](#license)
 
 ## Installation 
 
