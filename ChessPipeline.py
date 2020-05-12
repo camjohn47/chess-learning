@@ -12,8 +12,8 @@ import pickle
 class ChessPipeline():
 
 	# "pgn_directory" is the directory in which pgn files containing chess game data are located. Pgn is a format used to represent chess games, and a pgn file contains chess games represented in pgn format.
-	# 
-	def __init__(self,pgn_directory,model_args):
+	#  The pipeline possesses a SGDClassifier model, which can be trained to classify chess positions using ML.
+	def __init__(self,pgn_directory,model_args=None):
 		self.pgn_directory = pgn_directory
 		self.pgn_paths = glob(pgn_directory + '/*')
 		self.num_pgns = len(self.pgn_paths)
@@ -22,7 +22,7 @@ class ChessPipeline():
 		# Five major piece types for each player--excluding kings--where white's pieces are capitalized and black's are in lower-case.
 		self.white_pieces = ['P', 'N', 'B', 'R', 'Q']
 		self.black_pieces = ['p', 'n', 'b', 'r', 'q']
-		self.piece_indices = range(1,6)
+		self.piece_indices = range(1,7)
 
 	# Determine whether a game's data meets cleanliness criteria. Used in preprocessing to build training data. 
 	def headers_filter(self,headers):
@@ -46,7 +46,9 @@ class ChessPipeline():
 		game_hash = ' '.join(hash_features)
 
 		return game_hash
-	# 
+
+	# Randomly partitions the raw chess position data found in its pgn files. This partitioning is used to prepare mini-batches, which are used for training the classification model.
+	# We partition the raw data before building features to prevent memory overflow. Even simple features are too large to be held in memory for > 10,000's of games together (for most computers). 
 	def partition_pgn_data(self,num_partitions,downsample):
 		partitions = [ [] for partition in range(num_partitions)]
 		game_index = 0
@@ -91,10 +93,7 @@ class ChessPipeline():
 
 		return piece_counts
 
-	# Build input features for a chess board that will be considered in the model. 
-	def get_features(self,board):
-		return self.get_piece_counts(board)
-		piece_counts = self.get_piece_counts(board)
+	def count_bishop_pairs(self,piece_counts):
 		white_bishop_pair = 0
 
 		if piece_counts[2] == 2:
@@ -105,8 +104,14 @@ class ChessPipeline():
 		if piece_counts[8] == 2:
 			black_bishop_pair = 1
 
+		return [white_bishop_pair,black_bishop_pair]
+
+	# Build input features for a chess board that will be considered in the model. 
+	def get_features(self,board):
+		piece_counts = self.get_piece_counts(board)
 		white_mobility,black_mobility = self.get_mobility(board)
-		postitional_features = [white_bishop_pair,black_bishop_pair,white_mobility,black_mobility]
+		white_bishop_pair,black_bishop_pair = self.count_bishop_pairs(piece_counts)
+		postitional_features = [white_mobility,black_mobility]
 		features = piece_counts + postitional_features
 
 		return features
@@ -181,10 +186,8 @@ class ChessPipeline():
 		partitions = self.partition_pgn_data(num_partitions,downsample)
 		i = 0
 		for partition in partitions:
-			print('batch ' + str(i))
 			batch_inputs,batch_outputs = self.build_batch(partition)
 			self.model.partial_fit(np.matrix(batch_inputs),batch_outputs,classes=[1,0])
-			print(self.model.coef_[0])
 			self.save_model(model_path)
 			i += 1
 
