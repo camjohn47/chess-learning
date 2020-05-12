@@ -39,6 +39,8 @@ Note that in order to find any meaningful insights about chess from game play, t
 To get started with a ChessPipeline, you need to initialize it with two parameters: *pgn_directory* and *model_args*. The former is a directory in which pgn files are located; the latter consists of the desired ML model configurations. Note that the ML model is a *SGDClassifier*. Different models can be implemented without much modification to the code. Here is an example of how to start a ChessPipeline from pgn data in *training_data*, run batch learning on 200,000 of its games, and save the resulting model to *final_test.data*. 
 
 ```shell
+$ from ChessPipeline import ChessPipeline
+
 $ pgn_directory = 'training_data'
 $ num_partitions = int(1.0e2)
 $ model_path = 'final_test.data'
@@ -50,11 +52,10 @@ $ model_args = {'loss':loss_function,'alpha':regularization}
 pipeline = ChessPipeline(pgn_directory=pgn_directory,model_args=model_args)
 pipeline.batch_learning(num_partitions,model_path,downsample)
 ```
+Since holding the features for hundreds of thousands of games all at once will likely cause memory overflow, batch learning randomly partitions the chess positions found in the different games amongst the pgn files. Then, a batch of input features is made for each partition individually, which is then used for batch training. This way, memory is only needed for one batch at a time. 
 
-ii) ChessAI.py: AI engine used by the ChessGame module. 
+ii) ChessAI.py: AI engine used by the *ChessGame* module. It uses an alpha-beta pruning search to determine optimal moves given a valuation function. The valuation function assesses how good a chess position is for either player. You can choose to use either an ML valuation function or a heuristic based valuation function. Heuristic valuation can be customized by changing the *get_features* method. Input features used for heuristic/model-driven valuation can be customized through modifying *get_heuristic_features/get_model_features*. 
 
-iii) ChessGame.py: A Python interface for playing chess that runs in terminal. You can use this to test ML models built from the chess pipeline, test any arbitrary chess evaluation function (for example, using heuristics), or simply play for fun. 
+iii) ChessGame.py: A Python interface for playing chess that runs in terminal. You can use this to test ML models built from the chess pipeline; test any arbitrary chess evaluation function (for example, using heuristics or a ML model trained with *ChessPipeline*); or simply play for fun. You can find an example of how to start a game with *ChessGame* below. 
 
-More detailed instructions are below. 
-
-If you have any questions or feedback, please email me at curiouscalvinj@gmail.com. 
+If you have any questions or feedback, please email curiouscalvinj@gmail.com. Thanks for checking the project out.
