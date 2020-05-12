@@ -38,16 +38,16 @@ Note that in order to find any meaningful insights about chess from game play, t
 
 To get started with a ChessPipeline, you need to initialize it with two parameters: *pgn_directory* and *model_args*. The former is a directory in which pgn files are located; the latter consists of the desired ML model configurations. Note that the ML model is a *SGDClassifier*. Different models can be implemented without much modification to the code. Here is an example of how to start a ChessPipeline from pgn data in *training_data*, run batch learning on 200,000 of its games, and save the resulting model to *final_test.data*. 
 
-```shell
-$ from ChessPipeline import ChessPipeline
+```python
+from ChessPipeline import ChessPipeline
 
-$ pgn_directory = 'training_data'
-$ num_partitions = int(1.0e2)
-$ model_path = 'final_test.data'
-$ regularization = 5.0e-4
-$ downsample = 2.0e5
-$ loss_function = 'log'
-$ model_args = {'loss':loss_function,'alpha':regularization}
+pgn_directory = 'training_data'
+num_partitions = int(1.0e2)
+model_path = 'final_test.data'
+regularization = 5.0e-4
+downsample = 2.0e5
+loss_function = 'log'
+model_args = {'loss':loss_function,'alpha':regularization}
 
 pipeline = ChessPipeline(pgn_directory=pgn_directory,model_args=model_args)
 pipeline.batch_learning(num_partitions,model_path,downsample)
@@ -62,12 +62,12 @@ A Python interface for directly playing chess in Terminal. When playing chess ga
 
 Note that this script uses a position cache to store chess positions and their valuations as they're calculated. This means that when changing models, the path should be changed as well. Without doing so, different chess positions can be calculated with different valuation functions in the same game. The following excerpt is taken from the end of the *ChessGame* script. This is the code in which changes should be made to reflect new models.
 
-``` shell
-$ from ChessAI import ChessAI
+``` python
+from ChessAI import ChessAI
 
-$ cache_path = 'example_cache.data'
-$ model_path = 'example_model.data'
-$ ai = ChessAI(cache_path=cache_path,model_path=model_path)
+cache_path = 'example_cache.data'
+model_path = 'example_model.data'
+ai = ChessAI(cache_path=cache_path,model_path=model_path)
 ```
 
 If you have any questions or feedback, please email curiouscalvinj@gmail.com. Thanks for checking the project out.
