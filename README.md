@@ -1,5 +1,5 @@
-# Chess-System
-This project is about analyzing patterns from large amounts of chess game data. Specifically, this code can train supervised ML models from hundreds of thousands of chess games. These models can then be tested and experimented with by playing chess against an AI that uses these models for optimal play. More detailed instructions about installation and different features of the project are shown below.
+# chess-data
+Chess-data is about exploring chess with data. ML-driven pipelines are designed to extract insights from large amounts of chess game data. Collectively, the code can train supervised ML models from hundreds of thousands of chess games, and run chess games using an optimal AI system built from these models. This allows for chess learning models to be tested and experimented with by appropriate modeling and playing. More detailed instructions about installation and different features of the project are shown below.
 
 ## Table of Contents (Optional)
 
