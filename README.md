@@ -132,4 +132,4 @@ R N B Q K B N R            a1 b1 c1 d1 e1 f1 g1 h1
 It's your turn! Please submit one of the legal moves shown above.
 
 ## Support
-If you have any questions or feedback, please email curiouscalvinj@gmail.com. Thanks for checking the project ouy, and thanks to https://gist.github.com/fvcproductions/1bfc2d4aecb01a834b46#example-optional for providing a helpful readme template.
+If you have any questions or feedback, please email curiouscalvinj@gmail.com. Thanks for checking the project out, and thanks to https://gist.github.com/fvcproductions/1bfc2d4aecb01a834b46#example-optional for providing a helpful readme template.
