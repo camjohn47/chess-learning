@@ -1,12 +1,10 @@
 # chess-data
 Chess-data is about exploring chess with data. ML-driven pipelines are designed to extract insights from large amounts of chess game data. Collectively, the code can train supervised ML models from hundreds of thousands of chess games, and run chess games using an optimal AI system built from these models. This allows for chess learning models to be tested and experimented with through appropriate modeling and playing. More detailed instructions about installation and different features of the project are shown below.
 
-## Table of Contents (Optional)
-
-> If your `README` has a lot of info, section headers might be nice.
-
+## Table of Contents 
 - [Installation](#installation)
 - [Features](#features)
+- [Support](#support)
 
 ## Installation 
 
@@ -112,11 +110,26 @@ A Python interface for directly playing chess in Terminal. When playing chess ga
 Note that this script uses a position cache to store chess positions and their valuations as they're calculated. This means that when changing models, the path should be changed as well. Without doing so, different chess positions can be calculated with different valuation functions in the same game. The following excerpt is taken from the end of the *chess_game* script. This is the code in which changes should be made to reflect new models.
 
 ``` python
-from ChessAI import ChessAI
+from chessai import ChessAI
 
 cache_path = 'example_cache.data'
 model_path = 'example_model.data'
 ai = ChessAI(cache_path=cache_path,model_path=model_path)
 ```
+Here is an example of the game's interface. You'll see the following output from Terminal after successfully launching a game with *python3 chess_game.py*. 
+``` 
+     Board                         Notation                       Your Available Moves
+r n b q k b n r            a8 b8 c8 d8 e8 f8 g8 h8            a2a3, a2a4, b1a3, b1c3, b2b3
+p p p p p p p p            a7 b7 c7 d7 e7 f7 g7 h7            b2b4, c2c3, c2c4, d2d3, d2d4
+- - - - - - - -            a6 b6 c6 d6 e6 f6 g6 h6            e2e3, e2e4, f2f3, f2f4, g1f3
+- - - - - - - -            a5 b5 c5 d5 e5 f5 g5 h5            g1h3, g2g3, g2g4, h2h3, h2h4
+- - - - - - - -            a4 b4 c4 d4 e4 f4 g4 h4
+- - - - - - - -            a3 b3 c3 d3 e3 f3 g3 h3
+P P P P P P P P            a2 b2 c2 d2 e2 f2 g2 h2
+R N B Q K B N R            a1 b1 c1 d1 e1 f1 g1 h1
+```
 
-If you have any questions or feedback, please email curiouscalvinj@gmail.com. Thanks for checking the project out.
+It's your turn! Please submit one of the legal moves shown above.
+
+## Support
+If you have any questions or feedback, please email curiouscalvinj@gmail.com. Thanks for checking the project ouy, and thanks to https://gist.github.com/fvcproductions/1bfc2d4aecb01a834b46#example-optional for providing a helpful readme template.
