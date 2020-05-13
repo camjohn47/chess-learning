@@ -1,5 +1,5 @@
 # chess-data
-Chess-data is about exploring chess with data. ML-driven pipelines are designed to extract insights from large amounts of chess game data. Collectively, the code can train supervised ML models from hundreds of thousands of chess games, and run chess games using an optimal AI system built from these models. This allows for chess learning models to be tested and experimented with through appropriate modeling and playing. More detailed instructions about installation and different features of the project are shown below.
+Chess-data is about exploring chess with data. ML-driven pipelines are designed to extract insights from large amounts of chess game data. Collectively, the code is capable of training supervised ML models from millions of expert-level chess games, and running chess games using an optimal AI system built from these models. This allows for chess learning models to be tested and experimented with through appropriate modeling and playing. Heuristic models can be customized and used as well. More detailed instructions about installation and different features of the project are shown below.
 
 ## Table of Contents 
 - [Installation](#installation)
