@@ -28,10 +28,14 @@ class ChessAI():
 		self.pawn_development_weight = 0.05
 
 		# If model_path is provided, the ML model serialized in it will be used to evaluate chess positions. Otherwise, a heuristic function will be used. 
-		if os.path.exists(model_path):
-			file = open(model_path,'rb')
-			self.model = pickle.load(file)
-			file.close()
+		if model_path:
+			if os.path.exists(model_path):
+				file = open(model_path,'rb')
+				self.model = pickle.load(file)
+				file.close()
+
+			else:
+				print('ERROR. Model not found. Please check model path again.')
 
 	# Count the number of all 12 piece types on the board. There are 6 pieces for each side (white and black): pawn,knight,bishop,rook,queen,king, which are defined in that order and with white chosen first. 
 	def count_pieces(self,board):
@@ -117,7 +121,7 @@ class ChessAI():
 		valuation = self.model.predict_proba(features)[0][1]
 
 		return valuation
-	
+
 	def evaluate_move(self,board,move):
 		board.push(move)
 		valuation = self.heuristic_valuation(board)
