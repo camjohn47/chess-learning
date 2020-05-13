@@ -84,17 +84,6 @@ def computer_turn(board):
 	board.push(black_move)
 	display(board)
 
-board = chess.Board()
-cache_path = 'example_cache.data'
-model_path = 'example_model.data'
-ai = ChessAI(cache_path=cache_path,model_path=model_path)
-print(board)
-piece_counts = ai.count_pieces(board)
-pieces = ['P', 'N', 'B', 'R', 'Q','K','p', 'n', 'b', 'r', 'q','k']
-piece_counts = dict(list(zip(pieces,piece_counts)))
-print('\n' + 'Piece counts')
-print(piece_counts)
-
 # Main script that interacts with the user, executes moves, and organizes the development of the game. 
 board = chess.Board()
 
