@@ -1,5 +1,5 @@
 # chess-data
-Chess-data is about exploring chess with data. ML-driven pipelines are designed to extract insights from large amounts of chess game data. Collectively, the code can train supervised ML models from hundreds of thousands of chess games, and run chess games using an optimal AI system built from these models. This allows for chess learning models to be tested and experimented with by appropriate modeling and playing. More detailed instructions about installation and different features of the project are shown below.
+Chess-data is about exploring chess with data. ML-driven pipelines are designed to extract insights from large amounts of chess game data. Collectively, the code can train supervised ML models from hundreds of thousands of chess games, and run chess games using an optimal AI system built from these models. This allows for chess learning models to be tested and experimented with through appropriate modeling and playing. More detailed instructions about installation and different features of the project are shown below.
 
 ## Table of Contents (Optional)
 
@@ -11,7 +11,7 @@ Chess-data is about exploring chess with data. ML-driven pipelines are designed 
 ## Installation 
 
 ### Clone
-You can clone this repository by using the following link: BLANK. 
+You can clone this repository by using the following link: https://github.com/camjohn47/chess-data. 
 
 ### Prerequisites and Setup
 You'll need the following Python modules in order to run all three modules: 
@@ -31,26 +31,80 @@ A pipeline for parsing and analyzing large amounts of pgn chess files. Pgn is a 
 
 Note that in order to find any meaningful insights about chess from game play, tens of thousands of expert games are very likely a bare minimum. The example training data provided in the directory *training_data* contains hundreds of thousands of expert games thanks to pgnmentor.com.
 
-To get started with a ChessPipeline, you need to initialize it with two parameters: *pgn_directory* and *model_args*. The former is a directory in which pgn files are located; the latter consists of the desired ML model configurations. Note that the ML model is a *SGDClassifier*. Different models can be implemented without much modification to the code. Here is an example of how to start a ChessPipeline from pgn data in *training_data*, run batch learning on 200,000 of its games, and save the resulting model to *final_test.data*. 
+To get started with a *ChessPipeline* object, you need to initialize it with two parameters: *pgn_directory* and *model_args*. The former is a directory in which pgn files are located; the latter consists of the desired ML model configurations. Note that the ML model is a *SGDClassifier*. Different models can be implemented without much modification to the code. Here is an example of how to start a ChessPipeline from pgn data in *training_data*, run batch learning on 200,000 of its games, and save the resulting model to *final_test.data*. 
 
 ```python
-from ChessPipeline import ChessPipeline
+from chesspipeline import ChessPipeline
 
+# pgn_directory is the directory containing pgn files. 
 pgn_directory = 'training_data'
-num_partitions = int(1.0e2)
-model_path = 'final_test.data'
+num_partitions = int(5.0e2)
+
+# Path in which model will be saved.
+model_path = 'million_test.data'
+
+# Coefficient determining how strong the model's regularization will be weighted. Higher regularization -> higher penalty for model complexity. 
 regularization = 5.0e-4
-downsample = 2.0e5
+
+# Amount of chess games to sample for the batch learning process.
+downsample = 1.0e6
+
+# Loss function used to train the model.
 loss_function = 'log'
 model_args = {'loss':loss_function,'alpha':regularization}
 
-pipeline = ChessPipeline(pgn_directory=pgn_directory,model_args=model_args)
+pipeline = ChessPipeline(pgn_directory,model_args)
 pipeline.batch_learning(num_partitions,model_path,downsample)
 ```
-Since holding the features for hundreds of thousands of games all at once will likely cause memory overflow, batch learning randomly partitions the chess positions found in the different games amongst the pgn files. Then, a batch of input features is made for each partition individually, which is then used for batch training. This way, memory is only needed for one batch at a time. 
+Since holding the features for hundreds of thousands of games all at once will likely cause memory overflow, batch learning randomly partitions the different chess games found in the pgn files. Then, a batch of input features is made for each partition individually so that input features are needed for only one batch at a given time. This way, we can prevent memory overflow errors that would likely occur if we were to instead partition the entire input feature set (for all games). These game partitions are then iteratively processed into feature batches and used to train the ML model.
 
 ### Chess AI
 AI engine used for calculating opponent moves in the *ChessGame* module. It uses an alpha-beta pruning search to determine optimal moves given a valuation function. The valuation function assesses how good a chess position is for either player. You can choose to use either an ML valuation function or a heuristic based valuation function. Heuristic valuation can be customized by changing the *get_features* method. Input features used for heuristic/model-driven valuation can be customized through modifying *get_heuristic_features/get_model_features*. 
+
+For example, suppose you want the AI valuation to simply be a function of each piece's quantity on the board. Using the chess module, the following *count_pieces* method gets the job done simply. 
+
+  ``` python
+	# Count the number of all 12 piece types on the board. There are 6 pieces for each side (white and black): pawn,knight,bishop,rook,queen,king, which are defined in that order and with white chosen first. 
+	def count_pieces(self,board):
+		piece_counts = []
+		for piece_index in self.piece_indices:
+			piece_squares = board.pieces(piece_index, True)
+			piece_count = len(piece_squares)
+			piece_counts.append(piece_count)
+
+		for piece_index in self.piece_indices:
+			piece_squares = board.pieces(piece_index, False)
+			piece_count = len(piece_squares)
+			piece_counts.append(piece_count)
+
+		return piece_counts
+  ```
+  We can test this function by applying it to count the pieces on a starting chess board. 
+  ``` python
+  import chess
+  
+  board = chess.Board()
+  print(board)
+  piece_counts = count_pieces(board)
+  pieces = ['P', 'N', 'B', 'R', 'Q','K','p', 'n', 'b', 'r', 'q','k']
+  piece_counts = dict(list(zip(pieces,piece_counts)))
+  
+  print(+ '\n' + 'Piece counts')
+  print(piece_counts)    
+  ```
+  ```
+  r n b q k b n r
+  p p p p p p p p
+  . . . . . . . .
+  . . . . . . . .
+  . . . . . . . .
+  . . . . . . . .
+  P P P P P P P P
+  R N B Q K B N R
+
+  Piece counts
+  {'P': 8, 'N': 2, 'B': 2, 'R': 2, 'Q': 1, 'K': 1, 'p': 8, 'n': 2, 'b': 2, 'r': 2, 'q': 1, 'k': 1}
+  ```
 
 ### Chess Game 
 A Python interface for directly playing chess in Terminal. When playing chess games with the *chess_game* script, opponent game play comes from an instance of *ChessAI*. You can use this to test ML models built from a chess pipeline; test any arbitrary chess evaluation function (for example, using heuristics or a ML model trained with *ChessPipeline*); or just play for fun.
