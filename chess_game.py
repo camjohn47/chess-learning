@@ -5,7 +5,7 @@ import chess
 import chess.polyglot
 import pickle
 import sys
-from ChessAI import ChessAI
+from chessai import ChessAI
 
 # Constants used in the displayed method to produce UI and visuals.
 alphabet = string.ascii_lowercase
@@ -84,14 +84,24 @@ def computer_turn(board):
 	board.push(black_move)
 	display(board)
 
+board = chess.Board()
+cache_path = 'example_cache.data'
+model_path = 'example_model.data'
+ai = ChessAI(cache_path=cache_path,model_path=model_path)
+print(board)
+piece_counts = ai.count_pieces(board)
+pieces = ['P', 'N', 'B', 'R', 'Q','K','p', 'n', 'b', 'r', 'q','k']
+piece_counts = dict(list(zip(pieces,piece_counts)))
+print('\n' + 'Piece counts')
+print(piece_counts)
+
 # Main script that interacts with the user, executes moves, and organizes the development of the game. 
 board = chess.Board()
 
 # Path associated with the position cache, in which chess positions and their valuations are stored as they're calculated. NOTE: When changing models, the path should be changed as well. 
 # Without doing so, different chess positions can be calculated with different valuation functions in the same game.
 cache_path = 'example_cache.data'
-model_path = 'example_model.data'
-ai = ChessAI(cache_path=cache_path,model_path=model_path)
+ai = ChessAI(cache_path=cache_path)
 display(board)
 
 while not board.is_checkmate() and not board.is_stalemate():
