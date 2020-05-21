@@ -27,7 +27,6 @@ print('Validation error: ' + str(validation_error))
 
 # Test the above model on pgn test data found in <pgn_test_directory>. 
 test_dir = 'test_data'
-pipeline = ChessPipeline(pgn_directory,model_args,model_path=model_path)
 test_error = pipeline.test_model(test_dir,num_partitions,num_batches)
 print('Test error: ' + str(test_error))
 
