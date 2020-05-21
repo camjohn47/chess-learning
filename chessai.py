@@ -18,7 +18,7 @@ class ChessAI():
 			self.position_cache = pickle.load(file)
 			file.close()
 
-		self.piece_indices = range(1,7)
+		self.piece_indices = range(1,6)
 		self.null = chess.Move.null()
 		self.piece_values = {1:1,2:3,3:3.3,4:4.2,5:9,6:15}
 		white_piece_values = [1,3,3.3,4.2,9,15]
@@ -26,9 +26,10 @@ class ChessAI():
 		self.piece_values = white_piece_values + black_piece_values
 		self.mobility_weight = 0.1
 		self.pawn_development_weight = 0.05
+		self.move_entropy_weight = 0.25
 
 		# If model_path is provided, the ML model serialized in it will be used to evaluate chess positions. Otherwise, a heuristic function will be used. 
-		if model_path:
+		if model_path: 
 			if os.path.exists(model_path):
 				file = open(model_path,'rb')
 				self.model = pickle.load(file)
@@ -36,6 +37,35 @@ class ChessAI():
 
 			else:
 				print('ERROR. Model not found. Please check model path again.')
+
+	def get_entropy(self,samples):
+		distribution = self.build_distribution(samples)
+		product = 1.0
+
+		for count in distribution.values():
+			product = product * count
+
+		return product
+		entropy = 0.0
+
+		for x,probability in distribution.items():
+			entropy -= probability * math.log(probability)
+
+		return entropy
+
+	def build_distribution(self,samples):
+		distribution = {}	
+
+		for sample in samples:
+
+			if sample not in distribution:
+				distribution[sample] = 0
+
+			distribution[sample] += 1
+
+		#distribution = {event: count/float(len(samples)) for event,count in distribution.items()}
+
+		return distribution
 
 	# Count the number of all 12 piece types on the board. There are 6 pieces for each side (white and black): pawn,knight,bishop,rook,queen,king, which are defined in that order and with white chosen first. 
 	def count_pieces(self,board):
@@ -53,22 +83,45 @@ class ChessAI():
 		return piece_counts
 
 	# Calculate a vector containing white's move count and black's move count.
-	def get_mobility(self,board): 
+	def get_mobility_features(self,board): 
 		white_mobility,black_mobility = 0,0
 
 		if board.turn:
-			white_mobility = board.legal_moves.count()
+			white_moves = board.legal_moves
+			white_mobility = white_moves.count()
+			white_move_starts = self.get_move_starts(white_moves)
+			white_move_entropy = self.get_entropy(white_move_starts)
 			board.push(self.null)
-			black_mobility = board.legal_moves.count()
+
+			black_moves = board.legal_moves
+			black_mobility = black_moves.count()
+			black_move_starts = self.get_move_starts(black_moves)
+			black_move_entropy = self.get_entropy(black_move_starts)
 			board.pop()
 
 		else:
-			black_mobility = board.legal_moves.count()
-			board.push(self.null)
-			white_mobility = board.legal_moves.count()
+			black_moves = board.legal_moves
+			black_mobility = black_moves.count()
+			black_move_starts = self.get_move_starts(black_moves)
+			black_move_entropy = self.get_entropy(black_move_starts)
 			board.pop()
 
-		return [white_mobility,black_mobility]
+			white_moves = board.legal_moves
+			white_mobility = white_moves.count()
+			white_move_starts = self.get_move_starts(white_moves)
+			white_move_entropy = self.get_entropy(white_move_starts)
+			board.push(self.null)
+
+		#print(board)
+		#print(white_move_entropy)
+		#print(black_move_entropy)
+
+		return [white_mobility,black_mobility,white_move_entropy,black_move_entropy]
+
+	def get_move_starts(self,moves):
+		move_starts = [move.from_square for move in moves]
+
+		return move_starts
 
 	# Pawn development is calculated for each player as the total amount of rows thay player's pawns have traveled. 
 	def get_pawn_development(self,board):
@@ -83,9 +136,9 @@ class ChessAI():
 	# Build heuristic input features for a chess position represented by a Python chess board. 
 	def get_heuristic_features(self,board):
 		piece_counts = self.count_pieces(board)
-		mobility = self.get_mobility(board)
+		mobility_features = self.get_mobility_features(board)
 		pawn_development = self.get_pawn_development(board)
-		features = [piece_counts,mobility,pawn_development]
+		features = [piece_counts,mobility_features,pawn_development]
 
 		return features
 
@@ -105,12 +158,12 @@ class ChessAI():
 		if position_hash in self.position_cache:
 			return self.position_cache[position_hash]
 
-		piece_counts,mobility,pawn_development = self.get_heuristic_features(board)
+		piece_counts,mobility_features,pawn_development = self.get_heuristic_features(board)
 
 		for piece_index,piece_count in enumerate(piece_counts):
 			valuation += piece_count * self.piece_values[piece_index]
 
-		valuation += (self.mobility_weight * (mobility[0] - mobility[1])) + (self.pawn_development_weight * (pawn_development[0] - pawn_development[1]))
+		valuation += (self.mobility_weight * (mobility_features[0]*mobility_features[2] - mobility_features[1]*mobility_features[3])) + (self.pawn_development_weight * (pawn_development[0] - pawn_development[1])) 
 		self.position_cache[position_hash] = valuation
 
 		return valuation
@@ -138,6 +191,7 @@ class ChessAI():
 	def alpha_beta_search(self,board,alpha,beta,player,depth):
 		if depth == 0:
 			value = self.heuristic_valuation(board)
+			#value = self.model_valuation(board)
 			return value
 
 		elif player == 'White':
