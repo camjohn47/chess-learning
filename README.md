@@ -1,5 +1,7 @@
-# chess-data
-Chess-data is about exploring chess with data. ML-driven pipelines are designed to extract insights from large amounts of chess game data. Collectively, the code is capable of training supervised ML models from millions of expert-level chess games, and running chess games using an optimal AI system built from these models. This allows for chess learning models to be tested and experimented with through appropriate modeling and playing. Heuristic models can be customized and used as well. More detailed instructions about installation and different features of the project are shown below.
+# chess-explorer
+Chess-explorer is about exploring chess with data. You can conveniently use the *ChessPipeline* module to parse through and analyze an arbitrarily large amount of chess games. More specifically, chess game data formatted in PGN files. Careful pipeline design and batch learning methods solve the memory issues which would otherwise certainly be encountered when either processing or modeling hundreds of thousands (or more) of chess games. There is also a *ChessAI* module which determines optimal moves for a given chess position given an evaluation function of your choice. The evaluation function can be self-designed using heuristics or directly loaded from a ML model trained using *ChessPipeline* (or trained somewhere else). 
+
+Collectively, the code is capable of training supervised ML models from millions of expert-level chess games, finding optimal moves for a chess game with an AI engine, and easily playing against the computer with an intuitive interface. This allows for chess learning experimentation through pipeline-based learning and playing against the chess game/AI engines.  More detailed instructions about installation and different features of the project are shown below.
 
 ## Table of Contents 
 - [Installation](#installation)
@@ -20,6 +22,7 @@ You'll need the following Python modules in order to run all three modules:
 * chess
 * math
 * pickle
+* operator
 
 Once all of these modules are properly installed, you can run any of the modules from within their directory. 
 
@@ -27,34 +30,38 @@ Once all of these modules are properly installed, you can run any of the modules
 ### Chess Pipeline
 A pipeline for parsing and analyzing large amounts of pgn chess files. Pgn is a format in which chess games can be represented, and a pgn file is a file containing multiple pgn chess games. The pipeline is designed with the capability to build certain features from a chess position. These include the amount of each player's piece types on the board, where each piece is located, bishop pairs, pawn development, etc.. However, you can easily write methods to build additional features, insofar as these features can be built with *python-chess*: https://python-chess.readthedocs.io/en/latest/. The module is extensive, so most features should be within *python-chess*'s capabilities. 
 
-Note that in order to find any meaningful insights about chess from game play, tens of thousands of expert games are very likely a bare minimum. The example training data provided in the directory *training_data* contains hundreds of thousands of expert games thanks to pgnmentor.com.
+Note that in order to learn even the most basic insights about chess from game play, tens of thousands of expert games are very likely a bare minimum. The example training data provided in the directory *training_data* contains hundreds of thousands of expert games, thanks to pgnmentor.com and TWIC: https://theweekinchess.com/twic. This data is used to train a SGDClassifier of your choice with a batch learning approach. You can then test these models with *ChessPipeline* using PGN files located in the directory *test_data*.
 
-To get started with a *ChessPipeline* object, you need to initialize it with two parameters: *pgn_directory* and *model_args*. The former is a directory in which pgn files are located; the latter consists of the desired ML model configurations. Note that the ML model is a *SGDClassifier*. Different models can be implemented without much modification to the code. Here is an example of how to start a ChessPipeline from pgn data in *training_data*, run batch learning on 200,000 of its games, and save the resulting model to *final_test.data*. 
+To get started with a *ChessPipeline* object, you need to initialize it with the parameter *pgn_directory_train*:the directory in which pgn files for training the model are located. If you wish to load an existing SGDClassifier model, then you can set the optional argument *model_path* to the path in which this model is saved. Otherwise, you'll have to provide an additional parameter *model_args*: the desired configurations for the pipeline's *SGDClassifier* model. Different models can be implemented with very trivial modification to the code, such as decision trees. Here is an example of how to start a ChessPipeline from pgn data in *training_data*, run batch learning on 200,000 of its games, and save the resulting model to *final_test.data*. 
 
+Here is an example of how to initialize a ChessPipeline and perform some batch learning. 
 ```python
 from chesspipeline import ChessPipeline
 
-# pgn_directory is the directory containing pgn files. 
-pgn_directory = 'training_data'
-num_partitions = int(5.0e2)
+# <pgn_directory_train> is the directory containing pgn files for training the model. 
+pgn_directory_train = 'training_data'
 
-# Path in which model will be saved.
-model_path = 'million_test.data'
+# Path in which model will be saved. 
+model_path = 'final_test.data'
+
+# The number of partitions into which the pgn files will be split. The number of batches used during batch learning on each partition. 
+num_partitions = 1
+num_batches = 1000
 
 # Coefficient determining how strong the model's regularization will be weighted. Higher regularization -> higher penalty for model complexity. 
-regularization = 5.0e-4
+regularization = 1.0e-3
 
-# Amount of chess games to sample for the batch learning process.
-downsample = 1.0e6
+# The portion of each batch to be used for training the model. Conversely, the remaining portion of the batch is used for later testing.  
+train_size = 0.85
 
 # Loss function used to train the model.
 loss_function = 'log'
 model_args = {'loss':loss_function,'alpha':regularization}
 
-pipeline = ChessPipeline(pgn_directory,model_args)
-pipeline.batch_learning(num_partitions,model_path,downsample)
+pipeline = ChessPipeline(pgn_directory_train,model_args)
+validation_error = pipeline.batch_validation(num_partitions,num_batches,train_size=train_size,model_path=model_path)
 ```
-Since holding the features for hundreds of thousands of games all at once will likely cause memory overflow, batch learning randomly partitions the different chess games found in the pgn files. Then, a batch of input features is made for each partition individually so that input features are needed for only one batch at a given time. This way, we can prevent memory overflow errors that would likely occur if we were to instead partition the entire input feature set (for all games). These game partitions are then iteratively processed into feature batches and used to train the ML model.
+Since holding the features for hundreds of thousands of games all at once will likely cause memory overflow, the pipeline first randomly partitions the pgn files, after which it processes each partition into chess positions. Then, each partition is transformed into input/output batches for training and testing. Motivation is to ensure that only a small amount of processed batch data is needed at a single time. This way, we can prevent the memory issues that would likely occur if we were to instead build positions and features for the entire collection of pgn data (for all games) at once. 
 
 ### Chess AI
 AI engine used for calculating opponent moves in the *ChessGame* module. It uses an alpha-beta pruning search to determine optimal moves given a valuation function. The valuation function assesses how good a chess position is for either player. You can choose to use either an ML valuation function or a heuristic based valuation function. Heuristic valuation can be customized by changing the *get_features* method. Input features used for heuristic/model-driven valuation can be customized through modifying *get_heuristic_features/get_model_features*. 
