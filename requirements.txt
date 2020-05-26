@@ -2,11 +2,6 @@
 numpy
 sklearn
 python-chess
-operator
-random
-glob
-pickle
-math
 
 # linting requirements
 black
