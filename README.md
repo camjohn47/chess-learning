@@ -17,14 +17,13 @@ You can clone this repository by using the following link: https://github.com/ca
 You'll need the following Python modules in order to run all three modules: 
 * numpy
 * sklearn
-* random
-* glob
-* chess
-* math
-* pickle
-* operator
+* python-chess
 
-Once all of these modules are properly installed, you can run any of the modules from within their directory. 
+Once all of these modules are properly installed, you can run any of the modules from within their directory. You can install these packages by using pip install on the requirements.txt file: 
+
+```
+pip install -r requirements.txt
+```
 
 ## Features
 ### Chess Pipeline
