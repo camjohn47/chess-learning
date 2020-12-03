@@ -9,7 +9,8 @@ from chessai import ChessAI
 
 # Method called at every turn to show the game's board, notation and available moves to the user.
 def display(board):
-    print(f"\n{headers}")
+    headers = f"\n{'Board': >10}{'Notation': >33}{'Your Available Moves': >43}"
+    print(headers)
     moves = sorted([board.uci(move) for move in board.legal_moves])
     num_move_rows = int(len(moves) / moves_per_row)
     for row in reversed_rows:
