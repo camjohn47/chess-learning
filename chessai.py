@@ -1,247 +1,623 @@
 ﻿import os
 import pickle
-import chess
+from chess import square_distance
 import chess.polyglot
 import numpy as np
 import operator
+import sys
+from collections import Counter, defaultdict, OrderedDict
+from chess_features import get_features, get_attacks_from, get_attacks_on
+from chess_features import is_square_attacked_by, get_square_val, get_move_exchange
+import time
+from functools import partial
 import math
 
 class ChessAI():
+	"""
+	Class for generating automated chess play. Valuates chess positions using classifier predictions
+	and heuristics to assess who is most likely to win (and by how much). Quickly searches over and analyzes
+	different possible move sequences to find the optimal move for a given chess position.
+	"""
 	
-	def __init__(self,cache_path,model_path=None):
-		# Load position cache from designated path. This is a hash-table lookup from which previously analyzed positions can be retreived.  
-		self.position_cache = {}
-		self.cache_path = cache_path 
+	def __init__(self, model_path, valuation_path=None, reset_valuation=False):
+		"""
+		Arguments:
+		model_path (string): Name of file from which ML classifier for predicting chess game winners is loaded.
+		valuation_path (string): Pathname of the valuation cache where chess position valuations are stored.
+		reset_valuation (bool): Determines whether the valuation cache will be started from scratch. 
+		"""
 
-		if os.path.exists(cache_path):
-			file = open(cache_path,'rb')
-			self.position_cache = pickle.load(file)
-			file.close()
+		if not os.path.exists(model_path):
+			print('ERROR: Model not found. Please check the model path again.')
+			sys.exit(0)
 
-		self.piece_indices = range(1,6)
-		self.null = chess.Move.null()
-		self.piece_values = {1:1,2:3,3:3.3,4:4.2,5:9,6:15}
-		white_piece_values = [1,3,3.3,4.2,9,15]
-		black_piece_values = [-0.97*x for x in white_piece_values]
-		self.piece_values = white_piece_values + black_piece_values
-		self.mobility_weight = 0.1
-		self.pawn_development_weight = 0.05
-		self.move_entropy_weight = 0.25
+		file = open(model_path,'rb')
+		self.model = pickle.load(file)
+		file.close()
 
-		# If model_path is provided, the ML model serialized in it will be used to evaluate chess positions. Otherwise, a heuristic function will be used. 
-		if model_path: 
-			if os.path.exists(model_path):
-				file = open(model_path,'rb')
-				self.model = pickle.load(file)
+		self.valuation_path = valuation_path
+		self.valuation_cache = {}
+
+		# If reset_valuation = True, then a new, empty valuation cache will be used for this AI instance. 
+		# Whenever the model in a model_path learns from new data, or changes in any way, setting to True is a good idea. 
+		if not reset_valuation and valuation_path:
+			if os.path.exists(valuation_path):
+				file = open(valuation_path,'rb')
+				self.valuation_cache = pickle.load(file)
 				file.close()
 
-			else:
-				print('ERROR. Model not found. Please check model path again.')
+		# Constant parameters used to track pieces, players, and game.
+		self.piece_indices = range(1,7)
 
-	def get_entropy(self,samples):
-		distribution = self.build_distribution(samples)
-		product = 1.0
+		# True = White, False = Black.
+		self.players = [True, False]
+		self.has_castled = np.zeros((2))
 
-		for count in distribution.values():
-			product = product * count
+		# Variables and data structures used to track move valuations and sort moves. 
+		self.captures_cache = {}
+		self.move_rank_cache = {}
+		self.quiescence_squares_cache = {}
+		self.move_hist = defaultdict(int)
+		self.move_hist_scale = 1000
+		self.tt = defaultdict(dict)
+		self.max_sorting_depth = 3
+		self.min_quiescence_depth = 4
+		self.max_quiescence_sort_depth = 2
+		self.move_hist_norm = 1
+		self.move_hist_max = 1
+		log_pawn_weight = 1
+		log_deltas = [0.0, 3, 3.3, 4.5, 9, -0.98]
+		self.logistic_coefs = np.array([log_pawn_weight + log_delta for log_delta in log_deltas])
+		self.tactical_cache = {}
+		self.harmonic_mean = lambda x,y: 2.0 / (1.0/x + 1.0/y)
+		self.contraharmonic_mean = lambda x,y: (x**2 + y**2) / (x + y)
+		self.piece_count_inds = range(10, 15)
+		self.positional_weight, self.tactical_weight = 0.65, 0.35
 
-		return product
-		entropy = 0.0
+		# Used to filter out capture moves that are very unlikely to raise alpha during quiescence search.
+		# Requires value of captured piece to be within <max_capture_delta> of the last captured piece. 
+		self.max_capture_delta = 2
+		self.rank_cache = {}
+		self.moves_til_checkmate = float('inf')
 
-		for x,probability in distribution.items():
-			entropy -= probability * math.log(probability)
+	def get_tactical_valuation(self, board, features):
+		"""
+		Returns a weighted sum of each player's piece counts, with each piece's count weighted by its average value. 
+		Higher values are better for white; lower values are better for Black. 0 is evenly balanced. 
 
-		return entropy
+		Arguments:
+		board (chess Board): Current chess position. 
+		features (np array): Board's predictive features used for model predictions.
+		"""
 
-	def build_distribution(self,samples):
-		distribution = {}	
+		piece_counts = [features[i] - features[i + 5] for i in self.piece_count_inds]
+		net_pieces_mobility = np.sum(features[21:24] - features[27:30])
+		tactical_feats = piece_counts + [net_pieces_mobility]
+		tactical_hash = tuple(tactical_feats)
 
-		for sample in samples:
+		if tactical_hash in self.tactical_cache:
+			return self.tactical_cache[tactical_hash]
 
-			if sample not in distribution:
-				distribution[sample] = 0
+		player = board.turn
+		tactical_val = 1.0 / (1.0 + math.exp(-np.dot(tactical_feats, self.logistic_coefs)))
+		self.tactical_cache[tactical_hash] = tactical_val
+		
+		return tactical_val
 
-			distribution[sample] += 1
+	def get_positional_valuation(self, features):
+		"""
+		Returns ML model's probability of a white win using positional features.
+		AI model must be an sklearn classifier capable of probabilistic predictions 
+		(has a <predict_proba> method).
 
-		#distribution = {event: count/float(len(samples)) for event,count in distribution.items()}
+		Arguments:
+		features (np array): numerical ML features built from the chess position to be evaluated.
 
-		return distribution
+		Returns:
+		Float representing the likelihood of a white win.
+		"""
 
-	# Count the number of all 12 piece types on the board. There are 6 pieces for each side (white and black): pawn,knight,bishop,rook,queen,king, which are defined in that order and with white chosen first. 
-	def count_pieces(self,board):
-		piece_counts = []
-		for piece_index in self.piece_indices:
-			piece_squares = board.pieces(piece_index, True)
-			piece_count = len(piece_squares)
-			piece_counts.append(piece_count)
+		features = features.reshape(1, -1) 
+		model_val = self.model.predict_proba(features)[0][1]
 
-		for piece_index in self.piece_indices:
-			piece_squares = board.pieces(piece_index, False)
-			piece_count = len(piece_squares)
-			piece_counts.append(piece_count)
+		return model_val
 
-		return piece_counts
+	def board_valuation(self, board, player="Black", negamax=False):
+		"""
+		Valuate a chess position in terms of white's advantage. A valuation cache is used for memoization to reduce runtime.
+	
+		Arguments:
+		board (chess Board): board representing a position in a chess game.
+		player (string): the player to move.
 
-	# Calculate a vector containing white's move count and black's move count.
-	def get_mobility_features(self,board): 
-		white_mobility,black_mobility = 0,0
+		Returns:
+		Float representing white's advantage. If the position isn't tactical
+		"""
 
-		if board.turn:
-			white_moves = board.legal_moves
-			white_mobility = white_moves.count()
-			white_move_starts = self.get_move_starts(white_moves)
-			white_move_entropy = self.get_entropy(white_move_starts)
-			board.push(self.null)
+		board_hash = chess.polyglot.zobrist_hash(board)
 
-			black_moves = board.legal_moves
-			black_mobility = black_moves.count()
-			black_move_starts = self.get_move_starts(black_moves)
-			black_move_entropy = self.get_entropy(black_move_starts)
-			board.pop()
+		if board_hash in self.valuation_cache:
+			return self.valuation_cache[board_hash]
 
-		else:
-			black_moves = board.legal_moves
-			black_mobility = black_moves.count()
-			black_move_starts = self.get_move_starts(black_moves)
-			black_move_entropy = self.get_entropy(black_move_starts)
-			board.pop()
+		elif board.is_checkmate():
+			return -float('inf') if player else float('inf')
 
-			white_moves = board.legal_moves
-			white_mobility = white_moves.count()
-			white_move_starts = self.get_move_starts(white_moves)
-			white_move_entropy = self.get_entropy(white_move_starts)
-			board.push(self.null)
-
-		#print(board)
-		#print(white_move_entropy)
-		#print(black_move_entropy)
-
-		return [white_mobility,black_mobility,white_move_entropy,black_move_entropy]
-
-	def get_move_starts(self,moves):
-		move_starts = [move.from_square for move in moves]
-
-		return move_starts
-
-	# Pawn development is calculated for each player as the total amount of rows thay player's pawns have traveled. 
-	def get_pawn_development(self,board):
-		white_pawn_squares = board.pieces(1, True)
-		white_pawn_development = sum([int(square/8) for square in white_pawn_squares])
-		black_pawn_squares = board.pieces(1, False)
-		black_pawn_development = sum([int(square/8) for square in black_pawn_squares])
-		pawn_development = [white_pawn_development,black_pawn_development]
-
-		return pawn_development
-
-	# Build heuristic input features for a chess position represented by a Python chess board. 
-	def get_heuristic_features(self,board):
-		piece_counts = self.count_pieces(board)
-		mobility_features = self.get_mobility_features(board)
-		pawn_development = self.get_pawn_development(board)
-		features = [piece_counts,mobility_features,pawn_development]
-
-		return features
-
-	# Build model-based input features for a chess position represented by a Python chess board. 
-	def get_model_features(self,board):
-		piece_counts = self.count_pieces(board)
-		mobility = self.get_mobility(board)
-		features = np.matrix(piece_counts + mobility)
-
-		return features
-
-	# Evaluate position using heuristics, rather than a data-driven model. 
-	def heuristic_valuation(self,board):
-		valuation = 0.0
-		position_hash = chess.polyglot.zobrist_hash(board)
-
-		if position_hash in self.position_cache:
-			return self.position_cache[position_hash]
-
-		piece_counts,mobility_features,pawn_development = self.get_heuristic_features(board)
-
-		for piece_index,piece_count in enumerate(piece_counts):
-			valuation += piece_count * self.piece_values[piece_index]
-
-		valuation += (self.mobility_weight * (mobility_features[0]*mobility_features[2] - mobility_features[1]*mobility_features[3])) + (self.pawn_development_weight * (pawn_development[0] - pawn_development[1])) 
-		self.position_cache[position_hash] = valuation
+		features = get_features(board, self.has_castled)
+		tactical_val = self.get_tactical_valuation(board, features)
+		positional_val = self.get_positional_valuation(features)
+		valuation = (self.positional_weight * positional_val) + (self.tactical_weight * tactical_val)
+		self.valuation_cache[board_hash] = valuation
 
 		return valuation
 
-	# Evaluate position using the instance's ML model. 
-	def model_valuation(self,board):
-		features = (self.get_model_features(board))
-		valuation = self.model.predict_proba(features)[0][1]
+	def make_move(self, board, move):
+		if board.is_castling(move):
+			player = 0 if board.turn else 1
+			self.has_castled[player] = 1
 
-		return valuation
-
-	def evaluate_move(self,board,move):
 		board.push(move)
-		valuation = self.heuristic_valuation(board)
+
+	def undo_move(self, board):
+		move = board.pop()
+
+		if board.is_castling(move):
+			player = 0 if board.turn else 1
+			self.has_castled[player] = 0
+
+	def valuate_move(self, board, move, player):
+		"""
+		Temporarily make a move to estimate its short term value.
+
+		Returns:
+		Immediate valuation (float) of the position resulting from the move.
+		"""
+
+		self.make_move(board, move)
+		valuation = self.board_valuation(board, not player)
+		self.undo_move(board)
+
+		return valuation
+
+	def get_moves(self, board):
+		return list(board.legal_moves)
+
+	def is_move_check(self, board, move):
+		board.push(move)
+		check = True if board.is_check() else False
 		board.pop()
 
-		return valuation
+		return check
 
-	# Algorithm for finding optimal moves in a two person, zero-sum game. It's identical to the well-known minimax algorithm, with the exception that it is keeps track of two values: alpha and beta. 
-	# Alpha represents the greatest value the max player can acheive from other explored paths. Beta represents the lowest known value the minimizing player can acheive from explored
-	# paths. This allows for cut-offs to be made when alpha >= beta, because in such cases, the other player is guaranteed to have a better path available, so further exploring the current node 
-	# is redundant. For example, suppose you're playing a chess game and looking 4 moves ahead. When analyzing one of the possible branches, you realize that you might win if your opponent plays a
-	# foolish blunder. When considering other moves your opponent could make, it's clear that there are much better ones. As soon as you figure this out, you no longer need to explore the blunder path, 
-	# because assuming your opponent plays well, he/she won't do so. You can find more info online. 
-	def alpha_beta_search(self,board,alpha,beta,player,depth):
-		if depth == 0:
-			value = self.heuristic_valuation(board)
-			#value = self.model_valuation(board)
-			return value
+	def is_move_checkmate(self, board, move):
+		board.push(move)
+		checkmate = True if board.is_checkmate() else False
+		board.pop()
 
-		elif player == 'White':
-			for move in sorted(board.legal_moves,key=lambda move:self.evaluate_move(board,move),reverse=True):
-				board.push(move)
-				value = self.alpha_beta_search(board,alpha,beta,'Black',depth-1)
-				board.pop()
+		return checkmate
 
-				if value > alpha:
-					alpha = value
+	def is_tactical_move(self, board, move):
+		tactical = board.is_capture(move) 
+
+		return tactical
+
+	def get_captures(self, board, prev_capture_value=0):
+		"""
+		Returns list of tactical (capture-based) moves from a chess board.
+		"""
+
+		is_good_capture = lambda move: board.is_capture(move) and abs(get_square_val(board, move.to_square)) + self.max_capture_delta >= abs(prev_capture_value)
+		board_hash = chess.polyglot.zobrist_hash(board)
+
+		if board_hash in self.captures_cache:
+			return self.captures_cache[board_hash]
+
+		good_captures = [response for response in self.get_moves(board) if is_good_capture(response)]
+		self.captures_cache[board_hash] = good_captures
+
+		return good_captures
+
+	def rank_move(self, board, player, board_hash, move):
+		"""
+		Move ranking function used to sort moves according to expected value for the moving player. The more accurate
+		this function is for predicting move values, the quicker move searches will be for finding optimal moves. This
+		is because alpha-beta cutoffs occur faster and more often when the search starts with optimal moves.
+
+		Returns a float representing an estimate of how good the move is, using immediate tactical exchanges, move history 
+		from past alpha/beta searches, and heuristic valuations. If player is Black, lower ranks correspond to optimality.
+		"""
+
+		if board_hash in self.tt and move == self.tt[board_hash]['best_move'] or self.is_move_checkmate(board, move):
+			rank = float('inf')
+
+			return rank
+
+		move_hash = str(chess.polyglot.zobrist_hash(board)) + str(player) + str(move)
+		rank = 0
+
+		if move_hash in self.move_rank_cache:
+			rank = self.move_rank_cache[move_hash]
+		else:
+			is_attacked = board.is_capture(move) or is_square_attacked_by(board, not player, move.to_square)
+			rank = 100 * (get_move_exchange(board, move, player) + 0.01)  if is_attacked else 0
+			self.move_rank_cache[move_hash] = rank
+		
+		rank = -rank if not player else rank
+
+		if move in self.move_hist:
+			rank += self.move_hist[move]/self.move_hist_norm 
+		elif rank == 0:
+			player_delta = 1 if player else -1
+			rank += player_delta * self.valuate_move(board, move, player)
+
+		return rank
+
+	def quiescence_search(self, board, alpha, beta, player, move, prev_capture_val=0, quiescence_squares=None, depth=0, max_depth=5):
+		"""
+		An extended search for evaluating unstable positions. The idea is to
+		reduce the horizon effect by further exploring and analyzing unstable
+		positions reached at the end of the alpha beta search (the following
+		method). Unstable positions are those whose valuations are likely to
+		change rapidly with additional depth. Such positions often include captures,
+		new potential captures, and checks, which can be identified through simple
+		heuristics. 
+
+		An example is a position where White's queen just captured a pawn
+		on a square defended by Black. Without an extended quiescence search, 
+		this position is likely to be heavily misevaluated.
+
+		Arguments:
+		board (chess Board): The position to be analyzed.
+		alpha (float): Current lower bound of the highest value White can attain.
+		beta (float): Current upper bound of the lowest value Black can attain
+		(low = better for Black).
+		player (string): Active player.
+		move (chess Move): The most recently made move.
+		quiescence_squares: 
+		depth (int): Depth of the current position being explored by quiescence
+		search (with respect to position in alpha beta search that triggered the
+		function call) .
+		max_depth (int): Maximum depth of search. Needed to prevent massive
+		runtimes in certain positions.
+
+		Returns:
+		best_val (float): A float representing an estimate of how favorable the
+		best move for the given player is, with respect to White. 
+		best_moves (chess Move list): Sequence of best minimax moves (first move
+		is Black, second is White, ...) available for player.
+		"""
+
+		board_hash = chess.polyglot.zobrist_hash(board)
+		height = max_depth - depth
+		stand_pat_ready = not board.is_check() 
+		curr_val = self.board_valuation(board, player) if player else -self.board_valuation(board, player)
+		prev_moves, best_moves = [move], [move]
+
+		if stand_pat_ready and curr_val >= beta:
+			return curr_val, prev_moves
+
+		best_val = curr_val if not board.is_check() else -float('inf')
+		alpha = max(alpha, curr_val) if not board.is_check() else alpha
+		player_move_ranks = {player: partial(self.rank_move, board, player, board_hash) for player in self.players}
+		val = None
+		end_square = move.to_square
+		responses = self.get_captures(board, prev_capture_val) if not board.is_check() else self.get_moves(board)
+		responses.sort(key=player_move_ranks[player], reverse=True)
+
+		if not responses:
+			val = self.board_valuation(board, player)
+			val = -val if not player else val
+
+			return val, prev_moves
+		else:
+			for response in responses:
+				capture_val = get_square_val(board, response.to_square)
+				self.make_move(board, response)
+				val, next_moves = self.quiescence_search(board, -beta, -alpha, not player, move=response, prev_capture_val=capture_val, depth=depth + 1)
+				val = -val
+				self.undo_move(board)
+
+				moves =  prev_moves + next_moves
+				best_moves = moves if best_val < val else best_moves
+				best_val = max(best_val, val)
+				alpha = max(alpha, best_val)
 
 				if alpha >= beta:
-					return alpha
+					height = max_depth - depth 
+					self.move_hist[response] += (2 ** (height))
+					break
 
-			return alpha
+		best_move = best_moves[1] if depth != 0 and len(best_moves) > 1 else (best_moves[0] if best_moves else None)
+		has_prev_height = board_hash in self.tt and 'height' in self.tt[board_hash]
+		prev_height = self.tt[board_hash]['height'] if has_prev_height else None
+		is_best_search = not prev_height or height > prev_height
 
-		elif player == 'Black':
-			for move in sorted(board.legal_moves,key=lambda move:self.evaluate_move(board,move)):
-				board.push(move)
-				value = self.alpha_beta_search(board,alpha,beta,'White',depth-1)
-				board.pop()
+		if depth == 0 and best_move:
+			if not prev_height or height > prev_height:
+				self.tt[board_hash]['best_move'] = best_move
 
-				if value < beta:
-					beta = value
+		return best_val, best_moves
+
+	def get_quiescence_squares(self, board, move, opponent):
+		"""
+		Get a list of unstable squares whose next moves should be monitored closely during quiescence search. 
+		
+		Arguments:
+		board (chess Board): Current chess position. 
+		move (chess Move): Last move made by opponent.
+		opponent (string): Name of opponent.
+
+		Returns:
+		A set of chess squares for the quiescence search. 
+		"""
+
+		move_hash = str(board) + str(move) + str(opponent)
+
+		if move_hash in self.quiescence_squares_cache:
+			return self.quiescence_squares_cache[move_hash]
+
+		opponent_end = move.to_square
+		opponent_attacked = get_attacks_on(board, opponent, opponent_end)
+		opponent_attacks = get_attacks_from(board, opponent, opponent_end)
+		quiescence_squares = set(opponent_attacked + opponent_attacks)
+		self.quiescence_squares_cache[move_hash] = quiescence_squares
+
+		return quiescence_squares
+
+	def find_best_checkmate(self, move_stats, winning=True):
+		"""
+		Arguments:
+		move_stats (dict): A dictionary mapping each move to a 2 item list containing 
+		the move's value from the latest (deepest) alpha beta search, and the best
+		moves following that move that led to the valuation. 
+		winning (bool): Whether the AI has a checkmate (True) or its opponent does.
+
+		Returns:
+		The optimal move given that one of the players has checkmate. If the AI has
+		checkmate, this corresponds to the move that requires the least amount of
+		following moves to acheive checkmate. On the other hand, if the opponent 
+		has checkmate, the best move is the one that delays checkmate as much as
+		possible (most amount of following moves before checkmate).
+		"""
+
+		mate_val = float('inf') if winning else -float('inf')
+		mate_moves = [move for move in move_stats if move_stats[move][0] == mate_val]
+		mate_stats = {move: move_stats[move] for move in mate_moves}
+		best_checkmate = sorted(mate_stats.items(), key=lambda x:len(x[1][1]),
+							    reverse=not winning)[0]
+
+		return best_checkmate
+
+	def alpha_beta_search(self, board, alpha, beta, player, depth, max_depth, move=None, prev_move=None):
+		"""
+		Algorithm for finding optimal moves in a two person, zero-sum game. It's
+		a variant of the minimax algorithm for minimizing worst case loss in zero
+		sum games. What distinguishes alpha beta from other minimax algorithms is
+		mainly its alpha and beta variables--which are used to prune non-minimax
+		branches before they're analyzed. Alpha represents a lower bound of the
+		maximizing player's maximal move value. Beta represents an upper bound
+		of the minimizing player's minimal move value.
+
+		In this case, the maximizing and minimizing players are White and Black,
+		respectively. Cut-offs occur when alpha >= beta, which indicates that a 
+		previously explored opponent move is better than the move currently being
+		explored. So there's no point in further exploring branches from this
+		move, because this position won't be reached if the players play optimally.
+
+		Arguments:
+		board (chess Board): The position to be analyzed.
+		alpha (float): Current lower bound of the highest value White can attain.
+		beta (float): Current upper bound of the lowest value Black can attain
+		(low = better for Black).
+		player (string): Active player.
+		depth (int): Depth of the current position being explored (how many half
+		moves in the future from original position).
+		max_depth (int): Max depth of search at which position is evaluated
+		directly or with a quiescence search.
+		move (chess Move): The most recently made move.
+
+		Returns:
+		best_val (float): A float representing an estimate of how favorable the
+		best move for the given player is, with respect to White. 
+		best_moves (chess Move list): Sequence of best minimax moves (first move
+		is Black, second is White, ...) available for player.
+		"""
+
+		board_hash = chess.polyglot.zobrist_hash(board)
+		player_move_ranks = {player: partial(self.rank_move, board, player,
+									 board_hash) for player in self.players}
+		best_moves = []
+		best_val, val = -float('inf'), None
+		height = max_depth - depth
+
+		# If maximum depth is reached, then the current current position's value 
+		# returned is evaluated and returned, unless a quiescence search is needed.
+		# Quiescence search is needed if the position is unstable, such as if it 
+		# occurs before or after a capture.
+		if depth == max_depth:
+			quiescence_squares = self.get_quiescence_squares(board, move, not player) 
+			is_check = board.is_check()
+			extended_quiescence = prev_move and not quiescence_squares and not is_check
+			quiescence_squares = (self.get_quiescence_squares(board, prev_move, player)
+								 if extended_quiescence else quiescence_squares)
+
+			if not quiescence_squares and not is_check:
+				best_val = (-self.board_valuation(board, player) if not player
+							 else self.board_valuation(board, player))
+				best_moves = [move]
+			else:
+				best_val, best_moves = self.quiescence_search(board, alpha, beta,
+									   player, move)
+
+			return best_moves, best_val
+
+		# Continue searching available moves, tracking the best move-value pair
+		# for the moving player and breaking the search if alpha >= beta -> not
+		# a minimax branch.
+		else:
+			board_hash = chess.polyglot.zobrist_hash(board)
+			board_seen = board_hash in self.tt and 'best_moves' in self.tt[board_hash]
+			responses = self.tt[board_hash]['best_moves'] if board_seen else self.get_moves(board)
+
+			if depth <= self.max_sorting_depth and max_depth > 1:
+				responses.sort(key=player_move_ranks[player], reverse=True)
+
+			if not responses:
+				best_val = self.board_valuation(board, player)
+				best_val = -best_val if not player else best_val
+				best_moves = [move]
+
+			# See below comment for explanation. 
+			if depth == 0:
+				response_stats = {}
+
+			for response_ind, response in enumerate(responses):
+				self.make_move(board, response)
+				val_moves, val = self.alpha_beta_search(board, -beta, -alpha,
+								 not player, depth + 1, max_depth, response, move)
+				val = -val 
+				self.undo_move(board)
+
+				val_moves = [move] + val_moves if depth != 0 else val_moves
+				best_moves = val_moves if best_val < val else best_moves
+				best_val = max(best_val, val)
+				alpha = max(alpha, best_val)
+
+				if depth == 0:
+					response_stats[response] = [val, val_moves]
 
 				if alpha >= beta:
-					return beta
+					self.move_hist[response] += (2 ** (height))
+					break
 
-			return beta
+			# Since ordering initial moves can result in huge alpha beta speedups,
+			# the alpha beta search results are stored for each initial move 
+			# at each IDS depth, which are then used to sort the initial moves 
+			# at the start of the next IDS iteration. 
+			if depth == 0:
+				response_stats = sorted(response_stats.items(),
+									    key=lambda x:x[1][0], reverse=True)
+				self.tt[board_hash]['best_moves'] = [x[0] for x in response_stats]
 
-	# Use an alpha beta search to determine optimal move for the given chess position. 
-	def move_optimization(self,board,alpha,beta,depth):
-		opt_move = ''
-		min_value = 1.0e10
-		for move in board.legal_moves:
-			board.push(move)
-			value = self.alpha_beta_search(board,alpha,beta,'White',depth-1)
-			board.pop()
+		found_mate = depth == 0 and abs(best_val) == float('inf')
 
-			if value < min_value:
-				min_value = value
-				opt_move = move
+		if found_mate:
+			winning = best_val == float('inf')
+			best_move = self.find_best_checkmate(dict(response_stats), winning)
+		else:
+			has_prev_height = board_hash in self.tt and 'height' in self.tt[board_hash]
+			prev_height = self.tt[board_hash]['height'] if has_prev_height else None
+			best_move = (best_moves[1] if depth != 0 and len(best_moves) > 1
+						 else (best_moves[0] if best_moves else None))
+			is_best_search = not prev_height or height > prev_height
 
-		self.save_position_cache()
+			if responses and best_move and is_best_search:
+				self.tt[board_hash]['best_move'] = best_move
+				self.tt[board_hash]['height'] = height
 
-		return opt_move
+		return best_moves, best_val
 
-	def save_position_cache(self):
-		cache_file = open(self.cache_path,'wb')
-		cache_file.write(pickle.dumps(self.position_cache))
+	def iterative_depth_search(self, board, player, t_max=30, min_depth=4, stop_at_depth=False):
+		"""
+		Iteratively find best moves with an alpha beta search, incrementing the
+		search depth with each iteration. This is done until a minimum depth and
+		elapsed time have been reached. Information from previous searches is
+		used to greatly reduce the runtime and search space of subsequent searches.
+
+		Arguments:
+		board (chess Board): Position to be analyzed.
+		t_max (float): Max time for the last alpha beta search.
+		min_depth (int): The minmum depth that must be reached during alpha beta
+		searches. Will override t_max if not reached.
+		stop_at_depth (bool): Whether the search should stop at min_depth
+		regardless of elapsed time.
+
+		Returns:
+		best_val (float): A float representing an estimate of how favorable the
+		player's best move is with respect to White. 
+		best_moves (chess Move list): Sequence of best minimax moves (first move
+		is Black, second is White, ...) available for player.
+		"""
+
+		t_elapsed = 0.0
+		best_move, max_depth = None, 1
+		alpha, beta = -float('inf'), float('inf')
+
+		while max_depth <= min_depth or t_elapsed <= t_max:
+			if stop_at_depth and max_depth > min_depth:
+				break
+
+			start = time.time()
+			best_moves, best_val = self.alpha_beta_search(board, alpha, beta, player, 0, max_depth)
+			t_elapsed += time.time() - start
+			max_depth += 1
+			self.update()
+
+			# Checkmate found.
+			if abs(best_val) == float('inf'):
+				self.moves_til_checkmate = len(best_moves)
+				break
+
+		best_move = best_moves[0]
+
+		return best_move, best_val
+
+	def save_valuation_cache(self):
+		cache_file = open(self.valuation_path, 'wb')
+		cache_file.write(pickle.dumps(self.valuation_cache))
 		cache_file.close()
+
+	def scale_move_hist(self):
+		"""
+		Scale down move history values so that older searches from more distant
+		positions are less relevant.
+		"""
+
+		self.move_hist = defaultdict(int, {move: value/self.move_hist_scale
+										   for move, value in self.move_hist.items()})
+
+	def update(self):
+		self.save_valuation_cache()
+		self.scale_move_hist()
+		move_hist_vals = list(self.move_hist.values())
+		self.move_hist_norm = (np.percentile(move_hist_vals, 90) if move_hist_vals
+								 else 1.0e-5)
+		self.move_hist_max = np.max(move_hist_vals) if move_hist_vals else 1.0e-5
+
+	def get_rel_feature_importance(self, feature_labels=None):
+		"""
+		Returns a sorted dictionary of feature labels and their relative
+		importances with respect to lowest nonzero importance.
+		"""
+
+		feature_importances = {i: self.model.feature_importances_[i]
+							 for i in range(len(self.model.feature_importances_))}
+		feature_importances = dict(sorted(feature_importances.items(),
+								   key=operator.itemgetter(1), reverse=True))
+		min_importance = min([x for x in self.model.feature_importances_ if x != 0])
+		num_features = len(feature_importances)
+
+		if feature_labels:
+			labels = get_feature_labels()
+			feature_inds = range(len(labels))
+			rel_feature_importance = {labels[i]: feature_importances[i] / min_importance
+									  for i in feature_inds}
+		else:
+			rel_feature_importance = {feature: feature_importances[feature] / min_importance
+									  for feature in feature_importances}
+
+		return rel_feature_importance
+
+	def compare_logistic_features(self):
+		"""
+		Returns the relative feature importances of a logistic model's features 
+		with respect to the minimal nonzero feature importance. 
+		"""
+
+		logistic_coefs = self.model.coef_[0]
+		feature_importances = np.exp(logistic_coefs)
+		min_feature_importance = np.min(feature_importances[feature_importances > 0])
+		relative_importances = feature_importances / min_feature_importance
+
+		return reative_importances
 
 

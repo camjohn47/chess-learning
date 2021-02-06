@@ -1,350 +1,567 @@
 from glob import glob
-from sklearn.linear_model import SGDClassifier
-from sklearn.model_selection import train_test_split,KFold
-from sklearn.metrics import mean_squared_error as mse
+from sklearn.ensemble import RandomForestClassifier as rfc
+from sklearn.linear_model import SGDClassifier as sgd
+from sklearn.tree import DecisionTreeClassifier as dtc
+import sys
+from sklearn.metrics import mean_absolute_error as mae
 import numpy as np
 import random 
 import os
 import chess
 import chess.pgn
-import math
 import pickle
 import operator
+from chess_features import get_features, get_castling_type
+from itertools import product
+from functools import partial
+from collections import Counter
+import chess.polyglot
+import time
+import math
+import shutil
 
-# A pipeline for parsing, analyzing and modeling large amounts of chess data. The data must be expressed in pgn format. 
 class ChessPipeline():
+	"""
+	An ML pipeline for analyzing and building predictive features from large amounts of chess games. These features
+	can be directly used by ChessPipeline to train classifiers for predicting and evaluating chess positions while 
+	avoiding memory overflow and runtime issues. Has been successfully tested on 10's millions of chess games.
+	"""
 
-	# "pgn_directory" is the directory in which pgn files containing chess game data are located. Pgn is a format used to represent chess games, and a pgn file contains chess games represented in pgn format.
-	#  The pipeline possesses a SGDClassifier model, which can be trained to classify chess positions using ML.
-	def __init__(self,pgn_directory_train,model_args=None,model_path=None):
-		self.pgn_directory_train = pgn_directory_train
-		self.pgn_paths_train = glob(os.path.join(pgn_directory_train, "*"))
-		self.num_pgns_train = len(self.pgn_paths_train)
+	def __init__(self, model_path, model_type='rfc', model_args={}, reset_model=True):
+		"""
+		Arguments: 
+		model_path (string): Name of file used for saving the ChessPipeline's model. If reset_model=False, then it will
+		initialize its model by loading from model_path, rather than starting a new model.
+		model_type (string): Acronym used to determine the instance's model category. Can be 'rfc' for random forest classifier, 
+							'sgd' for stochastic gradient descent classifier, or 'dtc' for a decision tree classifier.
+		model_args (hash): 	 Dictionary mapping a model argument to its desired value.
+		reset_model (bool) : Whether the intialized model should be started fresh or loaded from <model_path>.
+		"""
 
-		if model_path:
-			self.load_model(model_path)
+		self.model_builders = {'rfc': partial(rfc, warm_start=True, n_estimators=1),
+							   'sgd': partial(sgd, warm_start=True),
+							   'dtc': dtc}
 
+		if not reset_model:
+			self.model = self.load_model(model_path)
+		elif model_type in self.model_builders:
+			self.model = self.model_builders[model_type](**model_args)
 		else:
-			self.model = SGDClassifier(**model_args)
+			print(f'ERROR: ChessPipeline was initialized with invalid model type "{model_type}". The valid model types are "rfc", "sgd", and "dtc".')
+			sys.exit(0)
 
-		# Five major piece types for each player--excluding kings--where white's pieces are capitalized and black's are in lower-case.
-		self.white_pieces = ['P', 'N', 'B', 'R', 'Q']
-		self.black_pieces = ['p', 'n', 'b', 'r', 'q']
+		self.model_path = model_path
+		self.model_type = model_type
+		self.white_pieces, self.black_pieces = ['P', 'N', 'B', 'R', 'Q', 'K'],  ['p', 'n', 'b', 'r', 'q', 'k']
 		self.pieces = self.white_pieces + self.black_pieces
-		self.piece_indices = range(1,6)
-		self.num_features = len(self.get_features(chess.Board()))
+		self.piece_to_index = {self.pieces[i]:i for i in range(len(self.pieces))}
+		self.piece_indices = range(1,7)
+		self.num_piece_types = len(self.white_pieces)
+		self.num_features = len(get_features(chess.Board()))
+		self.min_elo = 1800
+		self.max_elo = 3000
+		self.min_training_move = 3
 
-	def save_model(self,model_path):
-		model_file = open(model_path,'wb')
-		pickle.dump(self.model,model_file)
+	def save_model(self):
+		"""	Serialize ML model into binary information with pickle, and store it in the instance's model path."""
+
+		model_file = open(self.model_path,'wb')
+		pickle.dump(self.model, model_file)
 		model_file.close()
 
-	def load_model(self,model_path):
+	def load_model(self, model_path):
+		"""	Return a deserialized ML model from the given model path. NOTE: By default, the model's file must be written in binary mode."""
+
 		model_file = open(model_path,'rb')
-		self.model = pickle.load(model_file)
+		model = pickle.load(model_file)
 		model_file.close()
 
-	# Determine whether a game's data meets cleanliness criteria. Used in preprocessing to build training data. 
+		return model
+
+	def update_model_params(self, params):
+		""" Reset the ChessPipeline's random forest classifier to have different hyperparameters. NOTE: This will remove any information the
+		 rfc has previously learned.
+		
+		Arguments:
+		rfc_args (hash): A dictionary mapping rfc hyperparameters to their fixed values.
+		 """
+
+		self.model = self.model_builders[self.model_type](**params, warm_start=True, n_estimators=1) 
+
 	def headers_filter(self,headers):
+		""" Determine whether a game's data meets cleanliness criteria. Used in preprocessing to build training data. 
+
+		Arguments:
+		min_elo (int): The minimum ELO score both players must have for the game to be considered.
+		max_elo (int): The maximum ELO score both players can have without the game being filtered out.
+
+		Returns:
+		bool: Whether the game has passed all filtering criteria.
+		"""
+
 		if not headers:
 			return False
-
-		elif "Date" not in headers or headers["Result"][0] == '*' or '2' in headers["Result"]:
+		elif ("Date" not in headers or headers["Result"][0] == '*' or '2' in
+		 	  headers["Result"] or "BlackElo" not in headers or "WhiteElo" not in headers):
 			return False
-
 		else:
-			return True
+			try:
+				black_elo, white_elo = int(float(headers['BlackElo'])), int(float(headers['WhiteElo'])) 
+				white_elo_valid = self.min_elo < white_elo < self.max_elo
+				black_elo_valid = self.min_elo < black_elo < self.max_elo
 
-	# Create a hash key for a game using its headers. Specifically, a game is hashed 
-	#using its date and both players. This means that games are uniquely represented 
-	#unless they were played on the same date and by the same two players. 
-	def hash_game(self,game):
-		game_hash = " ".join([game.headers[key] for key in ("Date", "Black", "White")])
-		return game_hash
+				if black_elo_valid and white_elo_valid:
+					return True
 
-	# Partition a set of pgn paths into <num_partitions> partitions. These partitions 
-	# will be equally sized unless the amount of paths is indivisble by <num_partitions>,
-	# in which case the last partition will have # of paths = (amount of paths) % <num_paritions>.
-	def build_pgn_partitions(self,pgn_paths,num_partitions):
+			except ValueError:
+				return False
+
+	def group_shuffle(self, features, results, max_ind=None):
+		""" 
+		Shuffle a feature-result batch so that their shuffled indices align. This
+		means that the feature result arrays are shuffled together so that they
+		maintain their association after shuffling--ie, features_i and results_i
+		still correspond to the same position after shuffling, it's just likely a
+		different one. 
+
+		Arguments:
+		features (np array): float array of numerical features built from chess positions.
+		results (np array or list): binary group of results associated with same
+		positions in features.
+		max_ind (int): the feature/result index past which data is discarded. 
+		Used as a cleaning tool to filter out zeros from incomplete batches.
+
+		Returns: 
+		features (np array): shuffled features array.
+		results (np array/list): shuffled results array, where the shuffling is
+		identical to features' shuffling.
+		"""
+
+		max_ind = len(features) if not max_ind else max_ind
+		inds = list(range(max_ind))
+		random.shuffle(inds)
+
+		return features[inds, :], results[inds]
+
+	def serialize_batch(self, features, results, batch_paths):
+		"""
+		Randomly serialize the individual features/results of the features/results
+		batch into the files found in batch_paths.
+
+		Arguments:
+		batch_paths ([string]): List of strings associated with paths into which
+		features/results should be distributed.
+		"""
+
+		features, results = self.group_shuffle(features, results)
+		num_batches = float(len(batch_paths))
+		features_per_batch = len(features)/num_batches
+
+		for i, batch_path in enumerate(batch_paths):
+			if not os.path.exists(batch_path):
+				with open(batch_path, 'w') as f:
+					pass
+
+			batch_inds = list(range(int(i * features_per_batch), int((i + 1) * features_per_batch)))
+			file = open(batch_path, 'ab')
+			pickle.dump([features[batch_inds, :], results[batch_inds]], file)
+			file.close()
+
+	def get_batch_weights(self, results):
+		"""
+		Calculates and returns weights from a batch's results.
+
+		Arguments:
+		results (np array or list): binary group of results for the batch's positions.
+
+		Returns:
+		batch_weights (np array): float array of weights [weight_i], where weight_i = inverse frequency of result_i.
+		"""
+
+		result_counts = Counter(results)
+		num_results = float(len(results))
+		inv_result_prob = {result: num_results/(2 * float(count)) for result, count in result_counts.items()}
+		batch_weights = np.array([inv_result_prob[result] for result in results])
+
+		return batch_weights
+
+	def build_batches(self, pgn_dir, batch_dir, num_batch_files, reset_batches=False,
+				      batch_size=int(1.0e5), max_batches=int(1.0e3)):
+		""" 
+		Builds and serializes feature/result batches from the games found in
+		<pgn_dir>'s pgn files. These batches can be directly used to train ML
+		models with any of ChessPipeline's different learning methods. Batches
+		are randomly distributed to different batch files to ensure that learning
+		from each batch isn't biased towards certain games. Batches are periodically
+		serialized and deleted to avoid memory overflow problems and reduce runtime.
+
+		Arguments:
+		pgn_dir (string): A string representing directory of pgn files used for
+		building batches.
+		batch_dir (string list): Directory in which input/output batches will be saved. 
+		num_batch_files (int): Number of batch files that data will be written to. 
+		reset_batches (bool): If true, and batches_dir exists, all previous
+		batches in batches_dir will be deleted.
+		batch_size (int): Maximum size of a features/results batch before it is
+		 				  distributed, serialized, and reset.
+						  Note: There's a runtime/memory tradeoff in that low 
+						  batch sizes need more frequent writing to files, but 
+						  large batch sizes require more memory.
+		max_batches (int): Maximum number of feature batches written to batch files. 
+		"""
+
+		if not os.path.isdir(batch_dir):
+			os.mkdir(batch_dir)
+		elif reset_batches:
+			shutil.rmtree(batch_dir)
+			os.mkdir(batch_dir)
+
+		batch_paths = [f"{batch_dir}/batch_{i}.data" for i in range(1, num_batch_files)]
+		pgn_paths = glob(os.path.join(pgn_dir, "*"))
 		random.shuffle(pgn_paths)
-		num_paths = len(pgn_paths)
-		paths_per_partition = int(num_paths/num_partitions)
-		partitions = []
+		batch_features = np.zeros((batch_size, self.num_features))
+		batch_results = np.zeros(shape=(batch_size))
+		curr_batch_size, num_batches, num_positions = 0, 0, 0
+		start = time.time()
 
-		for i in range(num_partitions):
-			partition_start,partition_end = i*paths_per_partition,(i+1) * paths_per_partition
-			partition = pgn_paths[partition_start:partition_end]
-			partitions.append(partition)
+		for pgn_path in pgn_paths:
+			if num_batches > max_batches:
+				break
 
-		# Edge case which occurs if pgn paths can't be evenly split into <num_partitions> partitions.
-		if num_paths % num_partitions != 0:
-			partition_start,partition_end = (num_partitions)*paths_per_partition,num_paths
-			partition = pgn_paths[partition_start:partition_end]
-			partitions.append(partition)
-
-		return partitions
-
-	# Randomly partitions the raw chess position data found in its pgn files. This partitioning is used to prepare mini-batches, which are used for training the classification model.
-	# We partition the raw data before building features to prevent memory overflow. Even simple features are too large to be held in memory for > 10,000's of games together (for most computers). 
-	def process_pgn_partition(self,pgn_partition,shuffle=True,update_period=100000):
-		positions = []
-		results = []
-		game_index = 0
-
-		for pgn_path in pgn_partition:
 			pgn = open(pgn_path,encoding="latin-1")
-			print('Processing pgn path ' + str(pgn_path))
 			game = chess.pgn.read_game(pgn)
 
-			while game:
+			while game and num_batches <= max_batches:
 				board = game.board()
+				num_moves = len(list(game.mainline_moves()))
 
-				# Include the game in processing data only if it satisfies filter criteria. 
+				# If the current batch is too full to ingest data from the next game, it is serialized and deleted.
+				# Then a new batch is started.
+				if curr_batch_size + num_moves >= batch_size:
+					batch_features, batch_results = self.group_shuffle(batch_features,
+												    batch_results, curr_batch_size)
+					self.serialize_batch(batch_features, batch_results, batch_paths)
+					batch_features  = np.zeros((batch_size, self.num_features))
+					batch_results = np.zeros(shape=(batch_size))
+					num_positions = num_positions + curr_batch_size
+					curr_batch_size, num_batches = 0, num_batches + 1
+					batch_time, start = time.time() - start, time.time()
+					print(f"Number of built positions so far = {num_positions}. Batch build time = {batch_time}.")
+
+				# Filter out games that are incorrectly formatted or ended in a draw.
 				if self.headers_filter(game.headers):
 					result = int(float(game.headers["Result"][0]))
-					game_hash = self.hash_game(game)
-
-					# Hash the board associated with each position in the game, and assign it and its result to a partition according to this hash. 
-					# Note that if the hash were not dependent on the individual moves comprising a game, then a significant degree of randomness would be lost through mapping
-					# all positions of a given game to the same partition. The manner in which batch data is organized into batches affects the efficacy and runtime of the batch learning process.
 					moves = game.mainline_moves()
 					num_moves = len(list(moves))
 
-					if num_moves < 20:
+					# Ignore empty games.
+					if not num_moves:
 						game = chess.pgn.read_game(pgn)
 						continue
 
-					valid_turns = set(range(10,num_moves-10))
+					has_castled = np.zeros((2))
 
-					for turn,move in enumerate(moves):
+					# Iterate through game's moves and build features/results from each position.
+					for move_ind, move in enumerate(moves):
+						if board.is_castling(move): 
+							player = 0 if board.turn else 1
+							castling_type = get_castling_type(move)
+							has_castled[player] = castling_type
+
 						board.push(move)
 
-						if turn in valid_turns:
-							positions.append(board)
-							results.append(result) 
-
-					game_index += 1
-
-				if game_index != 0 and game_index % update_period == 0:
-					print(str(game_index) + ' games have been prepared for batching.')
+						batch_features[curr_batch_size, :] = get_features(board, has_castled)
+						batch_results[curr_batch_size] = result 
+						curr_batch_size += 1
 
 				game = chess.pgn.read_game(pgn)
 
-		if shuffle:
-			indices = list(range(len(positions)))
-			random.shuffle(indices)
-			positions = [positions[i] for i in indices]
-			results = [results[i] for i in indices]
+		# Leftover batch to be serialized. 
+		if curr_batch_size > 0:
+			batch_features, batch_results = self.group_shuffle(batch_features, batch_results, max_ind=curr_batch_size)
+			self.serialize_batch(batch_features, batch_results, batch_paths)
 
-		return positions,results
+	def deserialize_batches(self, batch_dir, batch_size=int(1.0e6), max_batches=int(1.0e3)):
+		"""
+		Yield batches of desired size from the batch files found in batch_paths.
+		Batches are loaded and learned from individually to prevent memory
+		issues and for quicker, more effective learning. Batch weights are
+		calculated for improved learning (win/loss imbalance reflected in weights).
 
-	# Count the number of all 12 piece types on the board. There are 6 pieces for
-	# each side (white and black): pawn,knight,bishop,rook,queen,king, which are defined 
-	# in that order and with white chosen first. 
-	def count_pieces(self,board):
-		piece_counts = []
-		for piece_index in self.piece_indices:
-			piece_squares = board.pieces(piece_index, True)
-			piece_count = len(piece_squares)
-			piece_counts.append(piece_count)
+		Arguments:
+		batch_dir (string): Name of directory from which batch data will be loaded. 
+		max_batches (int): Maximum number of batches returned (in total) by the
+		function call.
 
-		for piece_index in self.piece_indices:
-			piece_squares = board.pieces(piece_index, False)
-			piece_count = len(piece_squares)
-			piece_counts.append(piece_count)
+		Returns (on each yield iteration):
+		batch_features (np float array): Numerical features for random group of
+										 chess positions.
+		batch_results (binary np array): Results of the same random group of
+										 chess positions.
+		batch_weights (np float array): Inverse class frequency weights for the
+										 same chess positions.
+		"""
 
-		return piece_counts
+		batch_paths = glob(os.path.join(batch_dir, "*"))
+		random.shuffle(batch_paths)
+		start = time.time()
+		batch_features = np.zeros((batch_size, self.num_features))
+		batch_results = np.zeros(shape=(batch_size))
+		curr_batch_size, num_batches = 0, 0
 
-	# Caclculate each player's mobility, where a player's mobility is its number of legal moves. 
-	#This feature has incredibly high predictive value of who will win. 
-	def get_mobility(self,board):
-		white_mobility,black_mobility = 0,0
-		null = chess.Move.null()
+		for j, batch_path in enumerate(batch_paths):
+			if num_batches > max_batches:
+				break
 
-		if board.turn:
-			white_mobility = board.legal_moves.count()
-			board.push(null)
-			black_mobility = board.legal_moves.count()
-			board.pop()
+			file = open(batch_path, 'rb')
+
+			while True and num_batches <= max_batches:
+				try:
+					item = pickle.load(file)
+				except:
+					break
+
+				if type(item[0]) == int:
+					print(f'Invalid item found with int type at first index: {item}.')
+					continue
+
+				features, results = item
+				num_item_samples = len(features)
+
+				if curr_batch_size + num_item_samples >= batch_size:
+					batch_features, batch_results = self.group_shuffle(batch_features, batch_results, max_ind=curr_batch_size)
+					batch_weights = self.get_batch_weights(batch_results) 
+					yield batch_features, batch_results, batch_weights
+
+					batch_features, batch_results = np.zeros((batch_size, self.num_features)), np.zeros(shape=(batch_size))
+					curr_batch_size, num_batches = 0, num_batches + 1
+					del batch_weights
+
+				batch_inds = range(curr_batch_size, curr_batch_size + num_item_samples)
+				batch_features[batch_inds, :], batch_results[batch_inds] = features, results
+				curr_batch_size += num_item_samples
+				del features, results
+
+			file.close()
+
+		batch_features, batch_results = self.group_shuffle(batch_features, batch_results, max_ind=curr_batch_size)
+		batch_weights = self.get_batch_weights(batch_results)
+
+		yield batch_features, batch_results, batch_weights
+
+	def unify_batches(self, batch_dir, batch_size=int(1.0e5), max_samples=int(1.0e7)):
+		"""
+		Loads features/results from the files in batch_dir and collects them into
+		a single features/results batch. This method is needed in place of the
+		<deserialize_batches> method when training a decision tree classifier with 
+		the pipeline, because decision trees are unsuitable for batch learning.
+		Since the <tree_learning> method for training dtcs relies on a single 
+		fitting call for learning, it can only learn from a single training set.
+
+		Arguments:
+		batch_size (int): Same as above, the size of individual feature/result
+		batches loaded from batch_paths.
+		max_samples (int): The maximum size of the unified batch before it is
+		used for learning.
+
+		Returns:
+		features, results, weights (np arrays): Unified batch of features,
+		results, and inverse class frequency weights.
+		"""
+
+		features = np.zeros(shape=(max_samples, self.num_features))
+		results, weights = np.zeros((max_samples)), np.zeros((max_samples)) 
+		num_samples = 0
+
+		for j, batch in enumerate(self.deserialize_batches(batch_dir, batch_size)):
+			batch_features, batch_results, batch_weights = batch
+			num_batch_samples = len(batch_features)
+			batch_cutoff = (max_samples - num_samples if num_samples + num_batch_samples > max_samples
+						   else num_batch_samples)
+
+			batch_inds = range(0, batch_cutoff)
+			feature_inds = range(num_samples, min(max_samples, num_samples + num_batch_samples))
+			features[feature_inds, :]  = batch_features[batch_inds, :]
+			results[feature_inds] = batch_results[batch_inds]
+			weights[feature_inds] = batch_weights[batch_inds]
+			num_samples += batch_cutoff
+			print(f'Batch {j + 1} has been merged. Number of samples = {num_samples}.')
+
+			if num_samples >= max_samples:
+				break
+
+		print("Unification of batches has completed.")
+
+		return features, results, weights
+
+	def batch_learning(self, batch_dir, batch_size=int(1.0e5), max_batches=int(1.0e3)):
+		"""
+		Batch learning approach for incrementally learning from the different
+		batches found in train_dir. Note that this is currently only valid for 
+		stochastic gradient descent and random forest classifers, which have
+		<model_type> = 'sgd' and 'rtc' in ChessPipeline.
+
+		SGD uses batch learning in a straightforward way. Its learning process
+		already consists of incremental updates to parameters from individual
+		training samples. ChessPipeline implements rfc batch learning by training
+		a new tree for each features/results batch, using information from the
+		forest to guide the next tree's learning.
+
+		Arguments:
+		batch_dir (string): Name of directory from which batch files are loaded.
+		batch_size (int): Size of batches used for learning.
+		max_batches (int): Max # of feature/result batches that will be
+						   used during learning.
+		"""
+
+		learning_samples = 0
+		batches = self.deserialize_batches(batch_dir, batch_size, max_batches)
+
+		for i, batch in enumerate(batches):
+			batch_features, batch_results, batch_weights = batch
+
+			if self.model_type == 'rfc':
+				self.model.fit(batch_features, batch_results, sample_weight=batch_weights)
+				self.model.n_estimators += 1
+			elif self.model_type == 'sgd':
+				self.model.partial_fit(batch_features, batch_results,
+									   classes=[0,1], sample_weight=batch_weights)
+			else:
+				print((f"Error: A decision tree classifier can't use batch learning."
+					  f" Use <tree_learning> or change the ChessPipeline's model type."))
+				break
+
+			learning_samples += len(batch_features)
+			self.save_model()
+			print((f"Batch {i + 1} learning complete. Number of chess positions "
+				  f"used in batch learning so far: {learning_samples}."))
+
+	def tree_learning(self, batch_dir, batch_size=int(1.0e5), max_samples=int(1.0e7)):
+		"""
+		Train a decision tree classifier with a single fitting call, using the 
+		unifed features/results built from the files in <batch_dir>.
+
+		Arguments:
+		batch_dir (string): Name of directory from which test inputs/outputs will be built. 
+		batch_size (int): Size of individual batches fed into unified batch.
+		max_samples (int): Maximum size of the single unified batch used for training the dtc.
+		"""
+
+		random.shuffle(batch_paths)
+		features, results, weights = self.unify_batches(batch_dir, batch_size, max_samples)
+		self.model.fit(new_features, results, sample_weight=weights)
+		self.save_model()
+
+	def test_model(self, batch_dir, model=None, batch_size=int(1.0e5), max_batches=10):
+		"""
+		Returns the average MAE error of a trained model on batches loaded from
+		 <batch_dir>.
+
+		Arguments:
+		batch_dir (string): Name of directory from which test inputs/outputs will
+							be built. 
+		model (sklearn model): ML classifier whose predictions on chess positions
+							   are tested. Set to pipeline's model by default.
+		max_batches (int): Max number of batches used for testing.
+	
+		Returns:
+		avg_error (float): Portion of results that were incorrectly predicted.
+		"""
+
+		model = model if model else self.model
+		batch_errors, actual_batch_sizes = [], []
+		batches = self.deserialize_batches(batch_dir, batch_size, max_batches)
+
+		for i, batch in enumerate(batches):
+			if i >= max_batches:
+				break
+
+			batch_features, batch_results, _ = batch
+			actual_batch_size = len(batch_features)
+			actual_batch_sizes.append(actual_batch_size)
+			predicted_results = model.predict(batch_features)
+			batch_error = mae(batch_results, predicted_results) 
+			batch_errors.append(batch_error)
+
+		total_size = np.sum(actual_batch_sizes)
+		batch_weights = [actual_batch_size / total_size 
+						 for actual_batch_size in actual_batch_sizes]
+		avg_error = np.dot(batch_weights, batch_errors)
+
+		return avg_error
+
+	def grid_search(self, train_dir, test_dir, param_grid, batch_sizes,
+		  		    const_params={}, model_type=None, max_train_batches=10, max_test_batches=5):
+		"""
+		A grid search for finding a classifier's optimal hyperparameters
+		Conceptually, the same idea as sklearn's grid search. For each 
+		combination of hyperparameter values that can be taken from the hyperparameter
+		domains in param_grid, a 
+		
+		Arguments: 
+		train_dir (string): Names of directory used for building training batches.
+		test_dir (string): Name of directory used for building test batches.
+		param_grid (hash): Dictionary of the following form:
+		 					{hyperparameter (str): hyperparameter values (list)}. 
+		const_params (hash): Dictionary of this form form:
+							{hyperparameter label: constant value of hyperparameter}.
+		"""
+
+		if not model_type:
+			model_type = self.model_type
+		elif model_type not in self.model_builders:
+			print(f"ERROR: {model_type} is not a valid model type.")
+			sys.exit(0)
+
+		param_types = list(param_grid.keys())
+		param_combs = list(product(*list(param_grid.values())))
+		num_params = len(param_types)
+		clf_dics = [{param_types[j]: param_comb[j] for j in range(num_params)}
+					 for param_comb in param_combs]
+
+		clfs = [self.model_builders[model_type](**clf_dic, **const_params)
+			   for clf_dic in clf_dics]
+
+		clf_errors = []
+
+		if self.model_type == 'dtc':
+			for batch_size in batch_sizes:
+				features, results, weights = self.unify_batches(train_dir, batch_size)
+
+				for clf_ind, clf in enumerate(clfs):
+					clf.fit(features, results, sample_weight=weights)
+					error = self.test_model(test_dir, clf, batch_size, max_test_batches)
+					clfs[clf_ind] = clf
+					clf_dic = clf_dics[clf_ind]
+					clf_errors.append([clf_dic, batch_size, error])
+					print((f"Hyperparameters = {clf_dic} with batch size ="
+						  f" {batch_size} has error = {error}."))
 
 		else:
-			black_mobility = board.legal_moves.count()
-			board.push(null)
-			white_mobility = board.legal_moves.count()
-			board.pop()
+			for batch_size in batch_sizes:
+				batches = self.deserialize_batches(train_dir, batch_size, max_train_batches)
+				for i, batch in enumerate(batches):
+					batch_features, batch_results, batch_weights = batch
 
-		return [white_mobility,black_mobility]
+					for clf_ind, clf in enumerate(clfs):
+						if self.model_type == 'rfc':
+							clf.fit(batch_features, batch_results, sample_weight=batch_weights)
+							clf.n_estimators += 1
+						else:
+							clf.partial_fit(batch_features, batch_results,
+										    classes=[0,1], sample_weight=batch_weights)
 
-	# Count bishops for each player to determine whether or not they have the bishop pair. 1 = yes, 0 = no, for each player. 
-	def count_bishop_pairs(self,piece_counts):
-		white_bishop_pair = 0
+					print(f'Clfs have been trained on batch {i + 1}.')
 
-		if piece_counts[2] == 2:
-			white_bishop_pair = 1
+				for i, clf in enumerate(clfs):
+					error, clf_dic = self.test_model(test_dir, clf, batch_size,
+													 max_test_batches), clf_dics[i]
+					clf_errors.append([clf_dic, batch_size, error])
+					print((f"Parameter combination = {clf_dic} with batch size ="
+						  f" {batch_size} has error = {error}."))
 
-		black_bishop_pair = 0
-		
-		if piece_counts[8] == 2:
-			black_bishop_pair = 1
+			clf_errors = sorted(clf_errors, key=operator.itemgetter(2))
 
-		return [white_bishop_pair,black_bishop_pair]
+		return clf_errors
 
-	# Build input features for a chess board that will be considered in the model. 
-	def get_features(self,board):
-		piece_counts = self.count_pieces(board)
-		white_mobility,black_mobility = self.get_mobility(board)
-		white_bishop_pair,black_bishop_pair = self.count_bishop_pairs(piece_counts)
-		postitional_features = [white_mobility,black_mobility]
-		features = piece_counts 
 
-		return features
-
-	# For each player's 6 piece types, determine where on the board (=64 squares) all instances of the piece type are located.
-	def get_active_squares(self,board):
-		active_squares = []
-		for piece_index in self.piece_indices:
-			white_squares = board.pieces(piece_index + 1, True)
-			for square in white_squares:
-				active_square = (64*piece_index) + square
-				active_squares.append(active_square)
-
-		for piece_index in self.piece_indices:
-			black_squares = board.pieces(piece_index + 1, False)
-			for square in black_squares:
-				active_square = (64*piece_index) + square
-				active_squares.append(active_square)
-
-		return active_squares
-
-	# Build a set of input features and output features for each game. Output features are simply
-	# the result of the game: 1 = white win, 0 = black win. Draws have already been filtered out during 
-	# the partioning process. 
-	def build_batch(self,boards,batch_outputs,transpose_inputs=False,transpose_outputs=False):
-		batch_inputs = []
-
-		for board in boards:
-			inputs = self.get_features(board)
-			batch_inputs.append(inputs)
-
-		# Randomly shuffle the batch's inputs and outputs. 
-		indices = list(range(len(batch_inputs)))
-		random.shuffle(indices)
-		shuffled_inputs = np.array([batch_inputs[i] for i in indices])
-		shuffled_outputs = np.array([batch_outputs[i] for i in indices])
-
-		if transpose_inputs:
-			shuffled_inputs = shuffled_inputs.T
-
-		if transpose_outputs:
-			shuffled_outputs = shuffled_outputs.T
-
-		return shuffled_inputs,shuffled_outputs
-
-	# Get features for each position that took place in the game.
-	def process_game(self,game):
-		inputs = []
-		outputs = []
-		headers = game.headers
-		result = int(float(headers["Result"][0]))
-		board = game.board()
-
-		for move in game.mainline_moves():
-			board.push(move)
-			board_features = self.get_features(board)
-			inputs.append(board_features)
-			outputs.append(result)
-
-		return [inputs,outputs]
-
-	# Validate the ML pipeline by first randomly splitting the training pgn paths into <num_paritions> partitions. 
-	# For each partition, first process its pgn files into chess positions and corresponding results. 
-	# Then build <num_batches> many batches of inputs/outputs from these positions and results, split each batch into a train/test
-	# subset with <train_size>% of the batch data used for training, and the remaining portion of the data stored for later testing.
-	# Train the model on each training batch, and finally calculate mean squared error with the fully trained model on all testing batches. 
-	def batch_validation(self,num_partitions,num_batches,max_batch_size=1.0e10,train_size=0.85,model_path=None):
-		batches = range(num_batches)
-		validation_error = 0.0
-		test_inputs,test_outputs = np.zeros((0,self.num_features)),np.zeros((0))
-		pgn_partitions = self.build_pgn_partitions(self.pgn_paths_train,num_partitions)
-
-		for i,pgn_partition in enumerate(pgn_partitions):
-			positions,results = self.process_pgn_partition(pgn_partition,shuffle=True)
-			print('Training on partition ' + str(i) + ', paths ' + str(pgn_partition))
-			partition_size = float(len(positions))
-			batch_size = int(partition_size/num_batches)
-			num_partition_wins = float(len([x for x in results if x == 1]))
-			num_partition_losses = float(partition_size- num_partition_wins)
-
-			for batch in batches:
-				batch_start,batch_end = batch*batch_size,(batch + 1)*batch_size
-				batch_inputs,batch_outputs = self.build_batch(positions[batch_start:batch_end],results[batch_start:batch_end])
-				batch_training_inputs,batch_test_inputs,batch_training_outputs,batch_test_outputs = train_test_split(batch_inputs,batch_outputs,train_size=train_size)
-				train_batch_size = float(len(batch_training_outputs))
-				test_inputs = np.concatenate((test_inputs,batch_test_inputs),axis=0)
-				test_outputs = np.concatenate((test_outputs,batch_test_outputs),axis=0)
-				num_batch_wins = float(len([x for x in batch_training_outputs if x == 1]))
-				num_batch_losses = float(train_batch_size - num_batch_wins)
-				sample_weights = [partition_size/(2*num_partition_wins) if x == 1 else partition_size/(2*num_partition_losses) for x in batch_training_outputs]
-				self.model.partial_fit(batch_training_inputs,batch_training_outputs,classes=[1,0],sample_weight=sample_weights)
-
-				if model_path:
-					self.save_model(model_path)
-
-		predicted_outputs = self.model.predict(test_inputs)
-		validation_error = mse(test_outputs,predicted_outputs)
-
-		return validation_error	
-
-	# Similar to the above batch validation. The main conceptual difference is that no training occurs, so 
-	# each batch of inputs/outputs is not split into train/test subsets. Instead, the entire batch is used for testing. 
-	# Returns the average mean squared error across all batches for all partitions of test pgn paths. 
-	def test_model(self,pgn_directory_test,num_partitions,num_batches):
-		pgn_paths_test = glob(os.path.join(pgn_directory_test, "*"))
-		batches = range(num_batches)
-		test_inputs,test_outputs = np.zeros((0,self.num_features)),np.zeros((0))
-		pgn_partitions = self.build_pgn_partitions(pgn_paths_test,num_partitions)
-		total_error = 0.0
-		total_batches = 0.0
-
-		for i,pgn_partition in enumerate(pgn_partitions):
-			positions,results = self.process_pgn_partition(pgn_partition,shuffle=True)
-			print('Test partition ' + str(i) + ', paths ' + str(pgn_partition))
-			partition_size = len(positions)
-			batch_size = int(partition_size/num_batches)
-			print(len(positions))
-			num_wins = float(len([x for x in results if x == 1]))
-			num_losses = float(partition_size- num_wins)
-
-			for batch in batches:
-				batch_start,batch_end = batch*batch_size,(batch + 1)*batch_size
-				batch_inputs,batch_outputs = self.build_batch(positions[batch_start:batch_end],results[batch_start:batch_end])
-				batch_inputs = np.matrix(batch_inputs)
-				predicted_outputs = self.model.predict(batch_inputs)
-				batch_error = mse(batch_outputs,predicted_outputs)
-
-				total_error += batch_error
-				total_batches += 1.0
-
-		test_error = total_error/total_batches
-
-		return test_error
-
-	# Return a sorted dictionary mapping piece type ---> piece importance, where piece importance
-	# is determined by the model coefficients. Note that this must be done after training the model
-	# with batch learning, or some arbitrary fitting method (fit or partial_fit).
-	def get_piece_importance(self):
-		piece_to_importance = {}
-		piece_coefficients = self.model.coef_[0]
-		print('Model coefficients: ' + str(piece_coefficients))
-		white_pawn_importance = np.exp(piece_coefficients[0])
-		num_pieces = 10
-
-		for i in range(num_pieces):
-			piece_importance = np.exp(piece_coefficients[i])
-			relative_importance = piece_importance/white_pawn_importance
-			piece = self.pieces[i]
-			piece_to_importance[piece] = relative_importance
-
-		piece_to_importance = dict(sorted(piece_to_importance.items(),key=operator.itemgetter(1),reverse=True))
-
-		return piece_to_importance
